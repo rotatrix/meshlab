@@ -21,9 +21,11 @@ connection and queued callbacks are invalidated on shutdown.
 
 Model bounds use visible transformed meshes. Selection bounds currently mean the
 active mesh layer. Cursor and viewport-center picks intersect visible transformed
-triangles without modifying selection. Point clouds and misses use Rotatrix's
-configured fallback. Picking currently scans faces on demand, so very large meshes
-may take longer to start an orbit. The pivot marker does not test occlusion.
+triangles without modifying selection, using VCGLib's upstream `AABBBinaryTreeIndex`
+and its `DoRay` query. Each mesh has a lazily built local-space spatial index that is
+reused between queries and invalidated on document geometry/topology changes.
+Point clouds and misses use Rotatrix's configured fallback.
+The pivot marker does not test occlusion.
 World orientation is right-handed, Y-up, matching MeshLab's default view.
 
 ## Build locally on Windows

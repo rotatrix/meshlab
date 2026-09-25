@@ -3,13 +3,6 @@
 
 int main() {
     using namespace openaxis;
-    const auto hit = meshlab_openaxis::intersect({0,0,2},{0,0,-1},{-1,-1,0},{1,-1,0},{0,1,0});
-    if (!hit || std::abs(*hit-2) > 1e-12 ||
-        meshlab_openaxis::intersect({3,0,2},{0,0,-1},{-1,-1,0},{1,-1,0},{0,1,0}) ||
-        meshlab_openaxis::intersect({0,0,2},{0,0,1},{-1,-1,0},{1,-1,0},{0,1,0}) ||
-        meshlab_openaxis::intersect({0,0,2},{0,0,-1},{0,0,0},{0,0,0},{0,0,0})) {
-        std::cerr << "Surface ray picking failed\n"; return 1;
-    }
     for (Vec3 center : {Vec3{}, Vec3{3,-7,2}})
         for (Vec3 t : {Vec3{}, Vec3{12,-3,5}})
             for (Vec3 r : {Vec3{}, Vec3{.7,-1.3,.2}, Vec3{3.141592653589793,0,0}})

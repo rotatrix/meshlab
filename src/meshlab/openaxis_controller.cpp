@@ -4,6 +4,7 @@
 #include "glarea.h"
 #include "openaxis_controller.h"
 #include "openaxis_camera.h"
+#include "openaxis_picking.h"
 #include <QApplication>
 #include <QCursor>
 #include <QPainter>
@@ -69,6 +70,7 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
     openaxis::Value lastPose;
     std::optional<openaxis::Vec3> pivot;
     std::uint64_t revision = 0;
+    std::map<int, std::unique_ptr<meshlab_openaxis::MeshPicker<CMeshO>>> pickers;
 
     explicit Impl(GLArea &v) : view(v), client(options(&scheduler)),
         session(client, *this, nullptr, [this] {
@@ -85,8 +87,11 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         scheduler.beforeDispatch = [this] { refresh(); };
         QObject::connect(&timer, &QTimer::timeout, &scheduler, [this] { refresh(); });
         timer.start(100);
-        sceneObserver.changed = [this] { ++revision; session.cancel("scene_changed"); pivot.reset(); };
+        sceneObserver.changed = [this] {
+            ++revision; pickers.clear(); session.cancel("scene_changed"); pivot.reset();
+        };
         QObject::connect(view.md(), SIGNAL(meshSetChanged()), &sceneObserver, SLOT(notify()));
+        QObject::connect(view.md(), SIGNAL(meshDocumentModified()), &sceneObserver, SLOT(notify()));
         QObject::connect(view.md(), SIGNAL(documentUpdated()), &sceneObserver, SLOT(notify()));
         QObject::connect(view.md(), SIGNAL(currentMeshChanged(int)), &sceneObserver, SLOT(notify()));
         auto *shortcut = new QShortcut(QKeySequence("Ctrl+Shift+O"), &view);
@@ -109,8 +114,11 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
             !QApplication::activeModalWidget() && !QApplication::activePopupWidget();
     }
     std::string key() const {
-        return std::to_string(revision) + "/" + std::to_string(view.width()) + "/" +
+        std::string result = std::to_string(revision) + "/" + std::to_string(view.width()) + "/" +
             std::to_string(view.height()) + "/" + std::to_string(view.devicePixelRatioF());
+        for (auto it = view.meshVisibilityMap.cbegin(); it != view.meshVisibilityMap.cend(); ++it)
+            result += "/" + std::to_string(it.key()) + (it.value() ? ":1" : ":0");
+        return result;
     }
     std::optional<openaxis::Pose> read() const {
         const auto &tb = view.trackball;
@@ -193,7 +201,7 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         if (name == "model.bounds" || name == "selection.bounds") {
             vcg::Box3<Scalarm> bounds;
             for (auto &mesh : view.md()->meshIterator()) {
-                if (!mesh.isVisible() || (name == "selection.bounds" && &mesh != view.mm())) continue;
+                if (!view.meshVisibilityMap.value(mesh.id(), false) || (name == "selection.bounds" && &mesh != view.mm())) continue;
                 bounds.Add(mesh.cm.Tr, mesh.cm.bbox);
             }
             if (!bounds.IsNull()) return {{"min", openaxis::vector_value(vector(bounds.min))}, {"max", openaxis::vector_value(vector(bounds.max))}};
@@ -217,17 +225,24 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
             openaxis::Value result = {{"markerPosition", {px,py}}};
             const bool selected = name.find(".selection") != std::string::npos;
             for (auto &mesh : view.md()->meshIterator()) {
-                if (!mesh.isVisible() || (selected && &mesh != view.mm())) continue;
-                for (const auto &face : mesh.cm.face) {
-                    if (face.IsD()) continue;
-                    const auto hit = meshlab_openaxis::intersect(origin,direction,
-                        vector(mesh.cm.Tr * face.cP(0)), vector(mesh.cm.Tr * face.cP(1)), vector(mesh.cm.Tr * face.cP(2)));
-                    if (!hit || *hit >= closest) continue;
-                    closest = *hit;
-                    result["point"] = openaxis::vector_value(origin + direction * closest);
-                    vcg::Box3<Scalarm> bounds; bounds.Add(mesh.cm.Tr,mesh.cm.bbox);
-                    result["bounds"] = {{"min", openaxis::vector_value(vector(bounds.min))}, {"max", openaxis::vector_value(vector(bounds.max))}};
-                }
+                if (!view.meshVisibilityMap.value(mesh.id(), false) || (selected && &mesh != view.mm())) continue;
+                if (mesh.cm.fn == 0 || mesh.cm.bbox.IsNull() || std::abs(mesh.cm.Tr.Determinant()) < 1e-20) continue;
+                auto &picker = pickers[mesh.id()];
+                if (!picker) picker = std::make_unique<meshlab_openaxis::MeshPicker<CMeshO>>(mesh.cm);
+                const auto inverse = vcg::Inverse(mesh.cm.Tr);
+                const Point3m localOrigin = inverse * Point3m(origin.x, origin.y, origin.z);
+                Point3m localDirection;
+                for (int i = 0; i < 3; ++i)
+                    localDirection[i] = inverse[i][0]*direction.x + inverse[i][1]*direction.y + inverse[i][2]*direction.z;
+                const auto hit = picker->pick(mesh.cm, localOrigin, localDirection);
+                if (!hit) continue;
+                const auto world = vector(mesh.cm.Tr * *hit);
+                const double distance = (world - origin).dot(direction);
+                if (distance < 0 || distance >= closest) continue;
+                closest = distance;
+                result["point"] = openaxis::vector_value(world);
+                vcg::Box3<Scalarm> bounds; bounds.Add(mesh.cm.Tr,mesh.cm.bbox);
+                result["bounds"] = {{"min", openaxis::vector_value(vector(bounds.min))}, {"max", openaxis::vector_value(vector(bounds.max))}};
             }
             return result;
         }
