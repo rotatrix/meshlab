@@ -56,7 +56,7 @@ jobs:
       - name: Build and install
         run: cmake --build build-ci --parallel 3
       - run: cmake --install build-ci
-      - name: Camera, depth picking and scheduler tests
+      - name: Camera, picking, visual diagnostics and scheduler tests
         shell: bash
         run: |
           set -euo pipefail

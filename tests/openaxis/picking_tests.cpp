@@ -3,18 +3,23 @@
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
 #include "openaxis_picking.h"
+#include "openaxis_pivot.h"
 #include <chrono>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <vector>
 
-int main(int argc, char **argv) {
+int runTests(int argc, char **argv) {
     QApplication app(argc,argv);
     QGLFormat format; format.setDepth(true);
     QGLPixelBuffer buffer(256,256,format);
     if (!buffer.isValid() || !buffer.makeCurrent()) {
         std::cerr << "No OpenGL test context available\n"; return 77;
+    }
+    std::cout << "OpenGL renderer: " << glGetString(GL_RENDERER) << "; version: " << glGetString(GL_VERSION) << '\n';
+    if (!QGLFramebufferObject::hasOpenGLFramebufferObjects()) {
+        std::cerr << "Runner has no framebuffer-object support for selection-depth tests\n"; return 77;
     }
     glViewport(0,0,256,256);
     glEnable(GL_DEPTH_TEST);
@@ -39,6 +44,21 @@ int main(int argc, char **argv) {
     if (!hit || std::abs(hit->Z()+.5)>1e-4) return 9;
     hit=meshlab_openaxis::pickDepth(128,128);
     if (!hit || std::abs(hit->Z()-.5)>1e-4) return 10;
+    // A surface crossing the pivot occludes only half of the disc; neither
+    // pass may write depth or leak rendering state into subsequent picking.
+    glClearColor(0,0,0,1); glClearDepth(1);
+    glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_SCISSOR_TEST); glScissor(0,0,128,256);
+    glClearDepth(.25); glClear(GL_DEPTH_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
+    meshlab_openaxis::drawPivotDisc({0,0,0,1},1);
+    unsigned char left[4],right[4]; float depth;
+    glReadPixels(126,128,1,1,GL_RGBA,GL_UNSIGNED_BYTE,left);
+    glReadPixels(130,128,1,1,GL_RGBA,GL_UNSIGNED_BYTE,right);
+    glReadPixels(130,128,1,1,GL_DEPTH_COMPONENT,GL_FLOAT,&depth);
+    GLboolean depthWrites; glGetBooleanv(GL_DEPTH_WRITEMASK,&depthWrites);
+    if (left[1]<50 || left[1]>65 || right[1]<250 || depth!=1 || !depthWrites) return 11;
+    glClearDepth(1);
     const int viewport[4]={10,20,800,600};
     auto pixel=meshlab_openaxis::depthPixel(100,50,400,300,viewport);
     if (!pixel || (*pixel)[0]!=210 || (*pixel)[1]!=519 || meshlab_openaxis::depthPixel(-1,0,400,300,viewport)) return 4;
@@ -102,4 +122,10 @@ int main(int argc, char **argv) {
         glDisableClientState(GL_VERTEX_ARRAY);
         gl->glDeleteBuffers(2,buffers);
     }
+    return 0;
+}
+int main(int argc,char **argv) {
+    const int result=runTests(argc,argv);
+    if (result && result!=77) std::cerr << "Depth/pivot regression failed at check " << result << '\n';
+    return result;
 }

@@ -1,13 +1,17 @@
 #include <openaxis/navigation.hpp>
 #include <openaxis/connection_manager.hpp>
 #include <openaxis/logging.hpp>
+#include "openaxis_overlay.h"
 #include "glarea.h"
 #include "openaxis_controller.h"
 #include "openaxis_camera.h"
 #include "openaxis_picking.h"
+#include "openaxis_pivot.h"
 #include "openaxis_scheduler.h"
 #include <QApplication>
 #include <QClipboard>
+#include <QCheckBox>
+#include <QImage>
 #include <QCursor>
 #include <QDesktopServices>
 #include <QDialog>
@@ -65,6 +69,9 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
     QPointer<QLabel> statusLabel;
     QPointer<QPlainTextEdit> details;
     QStringList events;
+    bool overlayVisible = false, matricesValid = false;
+    double sceneModel[16]{}, sceneProjection[16]{};
+    std::optional<double> overlayExpiry;
     std::string lastContext;
     openaxis::Value lastPose;
     std::optional<openaxis::Vec3> pivot;
@@ -104,7 +111,7 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         session.diagnostics = [this](const openaxis::Diagnostic &d) {
             record(QString::fromStdString(d.event + " " + d.detail));
         };
-        collector.on_changed = [this] { updateDiagnostics(); };
+        collector.on_changed = [this] { updateDiagnostics(); view.update(); };
         connection.start();
     }
     ~Impl() override {
@@ -158,6 +165,14 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
             diagnostics->setModal(false);
             diagnostics->resize(620, 420);
             auto *layout = new QVBoxLayout(diagnostics);
+            auto *overlayToggle = new QCheckBox("Viewport diagnostics", diagnostics);
+            overlayVisible = true;
+            overlayToggle->setChecked(true);
+            layout->addWidget(overlayToggle);
+            QObject::connect(overlayToggle, &QCheckBox::toggled, &scheduler, [this](bool enabled) {
+                overlayVisible = enabled;
+                view.update();
+            });
             statusLabel = new QLabel(diagnostics);
             statusLabel->setTextFormat(Qt::PlainText);
             statusLabel->setWordWrap(true);
@@ -187,9 +202,10 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
             addButton("Close", [this] { diagnostics->hide(); });
             diagnostics->show();
         }
-        collector.set_enabled(diagnostics->isVisible());
+        collector.set_enabled(overlayVisible || diagnostics->isVisible());
         collector.set_context(key());
         updateDiagnostics();
+        view.update();
     }
     bool available() const {
         return view.isVisible() && view.isCurrent() && view.isValid() && view.isEnabled() &&
@@ -219,7 +235,10 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         return p;
     }
     void refresh() {
-        collector.set_enabled(diagnostics && diagnostics->isVisible());
+        collector.set_enabled(available() && (overlayVisible || (diagnostics && diagnostics->isVisible())));
+        if (overlayExpiry && openaxis::diagnostic_time() >= *overlayExpiry) {
+            overlayExpiry.reset(); view.update();
+        }
         const bool now = active();
         const auto context = key();
         if (context != lastContext || (focused && !now)) {
@@ -314,6 +333,17 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         return nullptr;
     }
     void sampleDepth() {
+        // Capture native matrices before the trackball and document overlays.
+        // This also reprojects diagnostics correctly during native mouse motion.
+        matricesValid = available();
+        if (matricesValid) {
+            glGetDoublev(GL_MODELVIEW_MATRIX,sceneModel);
+            glGetDoublev(GL_PROJECTION_MATRIX,sceneProjection);
+        }
+        samplePick();
+        drawPivot();
+    }
+    void samplePick() {
         if (!pickPending || !available()) return;
         pickPending = false;
         GLint viewport[4]; glGetIntegerv(GL_VIEWPORT, viewport);
@@ -337,20 +367,29 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         }
         if (hit) pickResult["point"] = openaxis::vector_value(vector(*hit));
     }
+    void drawPivot() {
+        if (!pivot || !matricesValid) return;
+        using namespace meshlab_openaxis::overlay;
+        auto p=transform(sceneProjection,transform(sceneModel,{pivot->x,pivot->y,pivot->z,1}));
+        if (!visible(p)) return;
+        meshlab_openaxis::drawPivotDisc(p,view.devicePixelRatioF());
+    }
     void paint(QPainter &painter) {
         if (!available()) return;
         painter.save();
-        if (pivot) {
-            const auto camera = read();
-            if (camera) {
-                const auto local = openaxis::Quat::from_rotvec(camera->r).inverse().rotate(*pivot - camera->t);
-                if (local.z < 0) {
-                    const double h = camera->ortho_extent > 0 ? camera->ortho_extent / 2 : -local.z * std::tan(camera->fov / 2);
-                    const QPointF pixel(view.width()/2. + local.x / h * view.height()/2., view.height()/2. - local.y / h * view.height()/2.);
-                    painter.setPen(QPen(Qt::black, 1.5)); painter.setBrush(Qt::green);
-                    painter.drawEllipse(pixel, 4., 4.);
-                }
-            }
+        painter.setClipRect(view.rect());
+        if (overlayVisible && matricesValid) {
+            const auto frame=collector.presentation();
+            overlayExpiry=frame.expires_at;
+            // Rasterize text on the CPU: MeshLab's native GL state can leave
+            // QPainter's GL glyph rendering blank. Composite one finished image.
+            const auto dpi=view.devicePixelRatioF();
+            QImage image(QSize(int(std::ceil(view.width()*dpi)),int(std::ceil(view.height()*dpi))),QImage::Format_ARGB32_Premultiplied);
+            image.setDevicePixelRatio(dpi); image.fill(Qt::transparent);
+            QPainter raster(&image);
+            meshlab_openaxis::overlay::draw(raster,frame,key(),sceneModel,sceneProjection,view.size(),openaxis::diagnostic_colors());
+            raster.end();
+            painter.drawImage(QPointF(),image);
         }
         painter.restore();
     }

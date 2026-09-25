@@ -16,6 +16,21 @@ events. **Reconnect** restarts the connection immediately; **Copy diagnostics**
 copies the displayed details and the last 64 KiB of the SDK log; **Open log** opens
 the session log. On Windows, logs are in `%LOCALAPPDATA%/Rotatrix/logs/meshlab-*.log`.
 A green marker shows the active pivot.
+Enable **Viewport diagnostics** in that window to draw the SDK presentation:
+semantic-colored text rows, labeled cursor/center crosshairs, candidate bounds and
+point crosses, and any supplied world-orientation geometry. The checkbox remains
+active when the window is closed. Disable it to remove the diagnostic overlay;
+the normal pivot remains independent. Coincident query labels stack beside one
+crosshair. Geometry follows native camera motion, clips to the viewport/frustum,
+and clears with its captured context or SDK expiry. Diagnostics never enter depth
+picking, bounds, selection, undo or saved content. No pick rays or camera axes are added.
+Text is rasterized before compositing to avoid the blank OpenGL text overlay.
+
+The renderer follows the [OpenAxis rendering contract](https://openaxis.rotatrix.com/reference/diagnostic-rendering/)
+and the PrusaSlicer OpenAxis overlay example. The separate pivot follows the
+[pivot appearance guidance](https://openaxis.rotatrix.com/experience/pivots-diagnostics/):
+a four-logical-pixel lime disc with a black rim, with opaque visible fragments
+and 23% opacity behind geometry. It never writes scene depth.
 
 Perspective and orthographic poses map to the native trackball, including its
 scale and nonzero center. Native mouse navigation remains available. Only the
@@ -32,7 +47,6 @@ without a first-gesture spatial-index build. Selection-only picks render the act
 layer into an offscreen buffer without changing visible depth or selection, preserving
 the viewport projection so rendered point sizes remain pickable.
 Background pixels use Rotatrix's configured fallback.
-The pivot marker does not test occlusion.
 World orientation is right-handed, Y-up, matching MeshLab's default view.
 
 ## Build locally on Windows
@@ -73,7 +87,7 @@ ctest --test-dir build-local/tests -C Release --output-on-failure
 
 `.github/workflows/openaxis-build.yml` runs on pushes and pull requests to
 `rotatrix/main`, and supports manual dispatch. It compiles Windows x64, Linux x64
-and macOS Intel packages, runs camera, depth-picking and scheduler tests, and uploads artifacts.
+and macOS Intel packages, runs camera, depth-picking, visual-overlay and scheduler tests, and uploads artifacts.
 Depth-picking tests report a skip if the runner cannot create an OpenGL context.
 Only successful non-PR runs on `rotatrix/main` create a **draft prerelease** with
 all three archives attached. Nothing is automatically published. Packages are

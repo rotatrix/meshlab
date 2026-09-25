@@ -26,3 +26,12 @@ target_include_directories(scheduler_tests PRIVATE
     "${OPENAXIS_SOURCE_DIR}/cpp/include" "${CMAKE_CURRENT_SOURCE_DIR}/../../src/meshlab")
 target_link_libraries(scheduler_tests PRIVATE Qt5::Core)
 add_test(NAME openaxis_qt_scheduler COMMAND scheduler_tests)
+add_executable(overlay_tests overlay_tests.cpp)
+target_compile_features(overlay_tests PRIVATE cxx_std_17)
+find_path(OPENAXIS_JSON_INCLUDE_DIR nlohmann/json.hpp
+    HINTS "${OPENAXIS_SOURCE_DIR}/../json-src/include" REQUIRED)
+target_include_directories(overlay_tests PRIVATE
+    "${OPENAXIS_SOURCE_DIR}/cpp/include" "${CMAKE_CURRENT_SOURCE_DIR}/../../src/meshlab"
+    "${OPENAXIS_JSON_INCLUDE_DIR}")
+target_link_libraries(overlay_tests PRIVATE Qt5::Widgets)
+add_test(NAME openaxis_visual_diagnostics COMMAND overlay_tests)
