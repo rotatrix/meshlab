@@ -11,16 +11,15 @@ The client reports its PID, the `workspace.modeling` tag and navigation capabili
 The SDK connects to the local service on port 6607. Open a mesh and activate its
 viewport. Use **Ctrl+Shift+O** with viewport focus to open the modeless
 **OpenAxis Diagnostics** window. It shows connection/focus/gesture status, the
-connection error and automatic retry countdown, navigation diagnostics and recent
-events. **Reconnect** restarts the connection immediately; **Copy diagnostics**
-copies the displayed details and the last 64 KiB of the SDK log; **Open log** opens
-the session log. On Windows, logs are in `%LOCALAPPDATA%/Rotatrix/logs/meshlab-*.log`.
+connection error and automatic retry countdown. **Reconnect** restarts the connection
+immediately; **Copy diagnostics** copies status, SDK evidence and the last 64 KiB
+of the SDK log. On Windows, logs are in `%LOCALAPPDATA%/Rotatrix/logs/meshlab-*.log`.
 A green marker shows the active pivot.
-Enable **Viewport diagnostics** in that window to draw the SDK presentation:
+Opening the window automatically draws the SDK presentation:
 semantic-colored text rows, labeled cursor/center crosshairs, candidate bounds and
-point crosses, and any supplied world-orientation geometry. The checkbox remains
-active when the window is closed. Disable it to remove the diagnostic overlay;
-the normal pivot remains independent. Coincident query labels stack beside one
+point crosses, and any supplied world-orientation geometry. Closing the window
+removes the diagnostic overlay; the normal pivot remains independent.
+There is no event-log viewer or diagnostics checkbox. Coincident query labels stack beside one
 crosshair. Geometry follows native camera motion, clips to the viewport/frustum,
 and clears with its captured context or SDK expiry. Diagnostics never enter depth
 picking, bounds, selection, undo or saved content. No pick rays or camera axes are added.

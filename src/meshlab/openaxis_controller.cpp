@@ -10,22 +10,18 @@
 #include "openaxis_scheduler.h"
 #include <QApplication>
 #include <QClipboard>
-#include <QCheckBox>
 #include <QImage>
 #include <QCursor>
-#include <QDesktopServices>
 #include <QDialog>
 #include <QFile>
 #include <QHBoxLayout>
 #include <QGLFramebufferObject>
 #include <QLabel>
 #include <QPainter>
-#include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
 #include <QShortcut>
 #include <QTimer>
-#include <QUrl>
 #include <QVBoxLayout>
 #include <cmath>
 #include <climits>
@@ -67,9 +63,7 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
     bool focused = false;
     QPointer<QDialog> diagnostics;
     QPointer<QLabel> statusLabel;
-    QPointer<QPlainTextEdit> details;
-    QStringList events;
-    bool overlayVisible = false, matricesValid = false;
+    bool matricesValid = false;
     double sceneModel[16]{}, sceneProjection[16]{};
     std::optional<double> overlayExpiry;
     std::string lastContext;
@@ -105,12 +99,7 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         auto *shortcut = new QShortcut(QKeySequence("Ctrl+Shift+O"), &view);
         shortcut->setContext(Qt::WidgetWithChildrenShortcut);
         QObject::connect(shortcut, &QShortcut::activated, &scheduler, [this] { toggleDiagnostics(); });
-        connection.on_state = [this](const openaxis::ConnectionStatus &s) {
-            record(QString::fromStdString(s.state + (s.error.empty() ? "" : ": " + s.error)));
-        };
-        session.diagnostics = [this](const openaxis::Diagnostic &d) {
-            record(QString::fromStdString(d.event + " " + d.detail));
-        };
+        connection.on_state = [this](const openaxis::ConnectionStatus &) { updateDiagnostics(); };
         collector.on_changed = [this] { updateDiagnostics(); view.update(); };
         connection.start();
     }
@@ -133,24 +122,10 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         result += "\nLog: " + logPath();
         return result;
     }
-    void record(const QString &text) {
-        events.append(QTime::currentTime().toString("HH:mm:ss.zzz") + " " + text);
-        while (events.size() > 100) events.removeFirst();
-        updateDiagnostics();
-    }
     void updateDiagnostics() {
-        if (!diagnostics || !diagnostics->isVisible()) return;
-        statusLabel->setText(statusText());
-        QStringList text;
-        for (const auto &line : collector.presentation().lines) text.append(QString::fromStdString(line.text));
-        if (text.empty()) text.append("Move the device over the mesh viewport to capture navigation diagnostics.");
-        text.append("\nRecent events:");
-        text.append(events);
-        const auto content = text.join('\n');
-        if (details->toPlainText() != content) details->setPlainText(content);
+        if (diagnostics && diagnostics->isVisible()) statusLabel->setText(statusText());
     }
     void reconnect() {
-        record("Manual reconnect requested");
         session.cancel("manual_reconnect");
         pivot.reset();
         connection.stop();
@@ -163,24 +138,13 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
             diagnostics = new QDialog(&view, Qt::Tool);
             diagnostics->setWindowTitle("OpenAxis Diagnostics");
             diagnostics->setModal(false);
-            diagnostics->resize(620, 420);
+            diagnostics->resize(520, 150);
             auto *layout = new QVBoxLayout(diagnostics);
-            auto *overlayToggle = new QCheckBox("Viewport diagnostics", diagnostics);
-            overlayVisible = true;
-            overlayToggle->setChecked(true);
-            layout->addWidget(overlayToggle);
-            QObject::connect(overlayToggle, &QCheckBox::toggled, &scheduler, [this](bool enabled) {
-                overlayVisible = enabled;
-                view.update();
-            });
             statusLabel = new QLabel(diagnostics);
             statusLabel->setTextFormat(Qt::PlainText);
             statusLabel->setWordWrap(true);
             statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
             layout->addWidget(statusLabel);
-            details = new QPlainTextEdit(diagnostics);
-            details->setReadOnly(true);
-            layout->addWidget(details);
             auto *buttons = new QHBoxLayout;
             layout->addLayout(buttons);
             auto addButton = [&](const QString &label, auto callback) {
@@ -190,7 +154,8 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
             };
             addButton("Reconnect", [this] { reconnect(); });
             addButton("Copy diagnostics", [this] {
-                QString text = "MeshLab OpenAxis diagnostics\n" + statusText() + "\n\n" + details->toPlainText();
+                QString text = "MeshLab OpenAxis diagnostics\n" + statusText() + "\n\n";
+                for (const auto &line : collector.presentation().lines) text += QString::fromStdString(line.text) + "\n";
                 QFile log(logPath());
                 if (log.open(QIODevice::ReadOnly)) {
                     log.seek(std::max<qint64>(0, log.size()-65536));
@@ -198,11 +163,14 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
                 }
                 QApplication::clipboard()->setText(text);
             });
-            addButton("Open log", [this] { QDesktopServices::openUrl(QUrl::fromLocalFile(logPath())); });
-            addButton("Close", [this] { diagnostics->hide(); });
+
+            addButton("Close", [this] { diagnostics->close(); });
+            QObject::connect(diagnostics, &QDialog::finished, &scheduler, [this] {
+                collector.set_enabled(false); view.update();
+            });
             diagnostics->show();
         }
-        collector.set_enabled(overlayVisible || diagnostics->isVisible());
+        collector.set_enabled(diagnostics->isVisible());
         collector.set_context(key());
         updateDiagnostics();
         view.update();
@@ -235,7 +203,7 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         return p;
     }
     void refresh() {
-        collector.set_enabled(available() && (overlayVisible || (diagnostics && diagnostics->isVisible())));
+        collector.set_enabled(available() && (diagnostics && diagnostics->isVisible()));
         if (overlayExpiry && openaxis::diagnostic_time() >= *overlayExpiry) {
             overlayExpiry.reset(); view.update();
         }
@@ -378,7 +346,7 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         if (!available()) return;
         painter.save();
         painter.setClipRect(view.rect());
-        if (overlayVisible && matricesValid) {
+        if (diagnostics && diagnostics->isVisible() && matricesValid) {
             const auto frame=collector.presentation();
             overlayExpiry=frame.expires_at;
             // Rasterize text on the CPU: MeshLab's native GL state can leave
