@@ -5,11 +5,24 @@
 #include "openaxis_controller.h"
 #include "openaxis_camera.h"
 #include "openaxis_picking.h"
+#include "openaxis_scheduler.h"
 #include <QApplication>
+#include <QClipboard>
 #include <QCursor>
+#include <QDesktopServices>
+#include <QDialog>
+#include <QFile>
+#include <QHBoxLayout>
+#include <QGLFramebufferObject>
+#include <QLabel>
 #include <QPainter>
+#include <QPlainTextEdit>
+#include <QPointer>
+#include <QPushButton>
 #include <QShortcut>
 #include <QTimer>
+#include <QUrl>
+#include <QVBoxLayout>
 #include <cmath>
 #include <climits>
 #include <limits>
@@ -19,25 +32,6 @@ namespace {
 template<class T> openaxis::Vec3 vector(const vcg::Point3<T> &p) { return {p[0], p[1], p[2]}; }
 vcg::Point3f point(openaxis::Vec3 p) { return {float(p.x), float(p.y), float(p.z)}; }
 openaxis::Quat rotation(const vcg::Quaternionf &q) { return {q[0], q[1], q[2], q[3]}; }
-class QtScheduler final : public QObject, public openaxis::Scheduler {
-public:
-    std::function<void()> beforeDispatch;
-    void post(Callback callback) override {
-        QMetaObject::invokeMethod(this, [this, callback = std::move(callback)] {
-            if (beforeDispatch) beforeDispatch();
-            callback();
-        }, Qt::QueuedConnection);
-    }
-    void post_at(double deadline, Callback callback) override {
-        post([this, deadline, callback = std::move(callback)] {
-            const auto delay = int(std::clamp(std::ceil((deadline - openaxis::diagnostic_time()) * 1000), 0., double(INT_MAX)));
-            QTimer::singleShot(delay, this, [this, callback] {
-                if (beforeDispatch) beforeDispatch();
-                callback();
-            });
-        });
-    }
-};
 // MeshDocument does not export staticMetaObject as DLL data on Windows, so
 // use Qt's string-based signal connection at this existing library boundary.
 class SceneObserver final : public QObject {
@@ -59,21 +53,28 @@ openaxis::OpenAxisClientOptions options(openaxis::Scheduler *scheduler) {
 
 struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
     GLArea &view;
-    QtScheduler scheduler;
+    meshlab_openaxis::QtScheduler scheduler;
     SceneObserver sceneObserver;
     openaxis::OpenAxisClient client;
+    openaxis::NavigationDiagnostics collector;
     openaxis::NavigationSession session;
     openaxis::OpenAxisConnectionManager connection;
     QTimer timer;
-    bool focused = false, diagnostics = false;
+    bool focused = false;
+    QPointer<QDialog> diagnostics;
+    QPointer<QLabel> statusLabel;
+    QPointer<QPlainTextEdit> details;
+    QStringList events;
     std::string lastContext;
     openaxis::Value lastPose;
     std::optional<openaxis::Vec3> pivot;
     std::uint64_t revision = 0;
-    std::map<int, std::unique_ptr<meshlab_openaxis::MeshPicker<CMeshO>>> pickers;
+    bool pickPending = false, pickSelection = false;
+    QPointF pickPixel;
+    openaxis::Value pickResult;
 
     explicit Impl(GLArea &v) : view(v), client(options(&scheduler)),
-        session(client, *this, nullptr, [this] {
+        session(client, *this, &collector, [this] {
             openaxis::NavigationOptions o;
             o.scheduler = &scheduler;
             o.observation = [this](const openaxis::NavigationContext &c) { return is_current(c) ? read() : std::nullopt; };
@@ -88,7 +89,7 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         QObject::connect(&timer, &QTimer::timeout, &scheduler, [this] { refresh(); });
         timer.start(100);
         sceneObserver.changed = [this] {
-            ++revision; pickers.clear(); session.cancel("scene_changed"); pivot.reset();
+            ++revision; session.cancel("scene_changed"); pivot.reset();
         };
         QObject::connect(view.md(), SIGNAL(meshSetChanged()), &sceneObserver, SLOT(notify()));
         QObject::connect(view.md(), SIGNAL(meshDocumentModified()), &sceneObserver, SLOT(notify()));
@@ -96,13 +97,99 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         QObject::connect(view.md(), SIGNAL(currentMeshChanged(int)), &sceneObserver, SLOT(notify()));
         auto *shortcut = new QShortcut(QKeySequence("Ctrl+Shift+O"), &view);
         shortcut->setContext(Qt::WidgetWithChildrenShortcut);
-        QObject::connect(shortcut, &QShortcut::activated, &scheduler, [this] { diagnostics = !diagnostics; view.update(); });
-        connection.on_state = [this](const openaxis::ConnectionStatus &) { if (diagnostics) view.update(); };
+        QObject::connect(shortcut, &QShortcut::activated, &scheduler, [this] { toggleDiagnostics(); });
+        connection.on_state = [this](const openaxis::ConnectionStatus &s) {
+            record(QString::fromStdString(s.state + (s.error.empty() ? "" : ": " + s.error)));
+        };
+        session.diagnostics = [this](const openaxis::Diagnostic &d) {
+            record(QString::fromStdString(d.event + " " + d.detail));
+        };
+        collector.on_changed = [this] { updateDiagnostics(); };
         connection.start();
     }
     ~Impl() override {
         timer.stop(); scheduler.beforeDispatch = {};
+        collector.on_changed = {};
+        delete diagnostics.data();
         connection.stop(); session.close();
+    }
+    QString logPath() const {
+        return QString::fromStdString(openaxis::DiagnosticLog::configure("meshlab")->path().u8string());
+    }
+    QString statusText() const {
+        const auto s = connection.status();
+        QString result = QString("Connection: %1\nEndpoint: %2\nViewport focus: %3 | Gesture: %4")
+            .arg(QString::fromStdString(s.state), QString::fromStdString(client.url()),
+                 focused ? "active" : "inactive", session.active() ? "active" : "idle");
+        if (!s.error.empty()) result += "\nLast connection error: " + QString::fromStdString(s.error);
+        if (s.retry_at) result += QString("\nAutomatic retry in %1 s").arg(std::max(0., *s.retry_at-openaxis::diagnostic_time()), 0, 'f', 1);
+        result += "\nLog: " + logPath();
+        return result;
+    }
+    void record(const QString &text) {
+        events.append(QTime::currentTime().toString("HH:mm:ss.zzz") + " " + text);
+        while (events.size() > 100) events.removeFirst();
+        updateDiagnostics();
+    }
+    void updateDiagnostics() {
+        if (!diagnostics || !diagnostics->isVisible()) return;
+        statusLabel->setText(statusText());
+        QStringList text;
+        for (const auto &line : collector.presentation().lines) text.append(QString::fromStdString(line.text));
+        if (text.empty()) text.append("Move the device over the mesh viewport to capture navigation diagnostics.");
+        text.append("\nRecent events:");
+        text.append(events);
+        const auto content = text.join('\n');
+        if (details->toPlainText() != content) details->setPlainText(content);
+    }
+    void reconnect() {
+        record("Manual reconnect requested");
+        session.cancel("manual_reconnect");
+        pivot.reset();
+        connection.stop();
+        connection.start();
+    }
+    void toggleDiagnostics() {
+        if (diagnostics) {
+            diagnostics->setVisible(!diagnostics->isVisible());
+        } else {
+            diagnostics = new QDialog(&view, Qt::Tool);
+            diagnostics->setWindowTitle("OpenAxis Diagnostics");
+            diagnostics->setModal(false);
+            diagnostics->resize(620, 420);
+            auto *layout = new QVBoxLayout(diagnostics);
+            statusLabel = new QLabel(diagnostics);
+            statusLabel->setTextFormat(Qt::PlainText);
+            statusLabel->setWordWrap(true);
+            statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            layout->addWidget(statusLabel);
+            details = new QPlainTextEdit(diagnostics);
+            details->setReadOnly(true);
+            layout->addWidget(details);
+            auto *buttons = new QHBoxLayout;
+            layout->addLayout(buttons);
+            auto addButton = [&](const QString &label, auto callback) {
+                auto *button = new QPushButton(label, diagnostics);
+                buttons->addWidget(button);
+                QObject::connect(button, &QPushButton::clicked, &scheduler, callback);
+            };
+            addButton("Reconnect", [this] { reconnect(); });
+            addButton("Copy diagnostics", [this] {
+                QString text = "MeshLab OpenAxis diagnostics\n" + statusText() + "\n\n" + details->toPlainText();
+                QFile log(logPath());
+                if (log.open(QIODevice::ReadOnly)) {
+                    log.seek(std::max<qint64>(0, log.size()-65536));
+                    text += "\n\nSDK log (last 64 KiB):\n" + QString::fromUtf8(log.readAll());
+                }
+                QApplication::clipboard()->setText(text);
+            });
+            addButton("Open log", [this] { QDesktopServices::openUrl(QUrl::fromLocalFile(logPath())); });
+            addButton("Close", [this] { diagnostics->hide(); });
+            diagnostics->show();
+        }
+        collector.set_enabled(diagnostics->isVisible());
+        collector.set_context(key());
+        updateDiagnostics();
     }
     bool available() const {
         return view.isVisible() && view.isCurrent() && view.isValid() && view.isEnabled() &&
@@ -132,6 +219,7 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         return p;
     }
     void refresh() {
+        collector.set_enabled(diagnostics && diagnostics->isVisible());
         const bool now = active();
         const auto context = key();
         if (context != lastContext || (focused && !now)) {
@@ -143,6 +231,8 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
             if (!lastPose.is_null() && value != lastPose && focused) session.native_camera_changed();
             lastPose = value;
         }
+        collector.set_context(context);
+        updateDiagnostics();
     }
     openaxis::NavigationContext capture_context() override { return active() ? openaxis::NavigationContext(key()) : openaxis::NavigationContext{}; }
     bool is_current(const openaxis::NavigationContext &c) override {
@@ -209,45 +299,43 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         const bool center = name == "pick.viewport_center" || name == "pick.viewport_center.selection";
         const bool cursorPick = name == "pick.cursor" || name == "pick.cursor.selection";
         if ((center || cursorPick) && (center || inside)) {
-            const auto camera = read();
-            if (!camera) return nullptr;
-            const double px = center ? view.width()*.5 : cursor.x();
-            const double py = center ? view.height()*.5 : cursor.y();
-            const double x = (2*px/view.width()-1) * double(view.width())/view.height();
-            const double y = 1-2*py/view.height();
-            const auto q = openaxis::Quat::from_rotvec(camera->r);
-            openaxis::Vec3 origin = camera->t, direction;
-            if (camera->ortho_extent > 0) {
-                origin = origin + q.rotate({x*camera->ortho_extent/2, y*camera->ortho_extent/2, 0});
-                direction = q.rotate({0,0,-1});
-            } else direction = q.rotate({x*std::tan(camera->fov/2), y*std::tan(camera->fov/2), -1}).normalized();
-            double closest = std::numeric_limits<double>::infinity();
-            openaxis::Value result = {{"markerPosition", {px,py}}};
-            const bool selected = name.find(".selection") != std::string::npos;
-            for (auto &mesh : view.md()->meshIterator()) {
-                if (!view.meshVisibilityMap.value(mesh.id(), false) || (selected && &mesh != view.mm())) continue;
-                if (mesh.cm.fn == 0 || mesh.cm.bbox.IsNull() || std::abs(mesh.cm.Tr.Determinant()) < 1e-20) continue;
-                auto &picker = pickers[mesh.id()];
-                if (!picker) picker = std::make_unique<meshlab_openaxis::MeshPicker<CMeshO>>(mesh.cm);
-                const auto inverse = vcg::Inverse(mesh.cm.Tr);
-                const Point3m localOrigin = inverse * Point3m(origin.x, origin.y, origin.z);
-                Point3m localDirection;
-                for (int i = 0; i < 3; ++i)
-                    localDirection[i] = inverse[i][0]*direction.x + inverse[i][1]*direction.y + inverse[i][2]*direction.z;
-                const auto hit = picker->pick(mesh.cm, localOrigin, localDirection);
-                if (!hit) continue;
-                const auto world = vector(mesh.cm.Tr * *hit);
-                const double distance = (world - origin).dot(direction);
-                if (distance < 0 || distance >= closest) continue;
-                closest = distance;
-                result["point"] = openaxis::vector_value(world);
-                vcg::Box3<Scalarm> bounds; bounds.Add(mesh.cm.Tr,mesh.cm.bbox);
-                result["bounds"] = {{"min", openaxis::vector_value(vector(bounds.min))}, {"max", openaxis::vector_value(vector(bounds.max))}};
-            }
-            return result;
+            pickPixel = QPointF(center ? view.width()*.5 : cursor.x(), center ? view.height()*.5 : cursor.y());
+            pickSelection = name.find(".selection") != std::string::npos;
+            pickResult = {{"markerPosition", {pickPixel.x(),pickPixel.y()}}};
+            pickPending = true;
+            // Repaint synchronously to sample the current camera's depth while
+            // the native scene matrices are installed. No geometry index or CPU
+            // face traversal; the same path also picks rendered point clouds.
+            view.repaint();
+            pickPending = false;
+            return pickResult;
         }
         // A missing surface hit lets the server select its configured fallback.
         return nullptr;
+    }
+    void sampleDepth() {
+        if (!pickPending || !available()) return;
+        pickPending = false;
+        GLint viewport[4]; glGetIntegerv(GL_VIEWPORT, viewport);
+        const auto pixel = meshlab_openaxis::depthPixel(pickPixel.x(),pickPixel.y(),view.width(),view.height(),viewport);
+        if (!pixel) return;
+        std::optional<vcg::Point3d> hit;
+        if (!pickSelection) {
+            hit = meshlab_openaxis::pickDepth((*pixel)[0],(*pixel)[1]);
+        } else if (auto *mesh = view.mm()) {
+            if (!view.meshVisibilityMap.value(mesh->id(),false)) return;
+            hit = meshlab_openaxis::pickLayerDepth((*pixel)[0],(*pixel)[1], [&] {
+                auto *shared = view.mvc()->sharedDataContext();
+                shared->setMeshTransformationMatrix(mesh->id(),mesh->cm.Tr);
+                shared->draw(mesh->id(),view.context());
+            });
+            if (hit) {
+                vcg::Box3<Scalarm> bounds; bounds.Add(mesh->cm.Tr,mesh->cm.bbox);
+                if (!bounds.IsNull()) pickResult["bounds"] = {{"min",openaxis::vector_value(vector(bounds.min))},
+                                                             {"max",openaxis::vector_value(vector(bounds.max))}};
+            }
+        }
+        if (hit) pickResult["point"] = openaxis::vector_value(vector(*hit));
     }
     void paint(QPainter &painter) {
         if (!available()) return;
@@ -264,12 +352,6 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
                 }
             }
         }
-        if (diagnostics) {
-            const QString text = QString("OpenAxis: %1 | Focus: %2 | Gesture: %3")
-                .arg(QString::fromStdString(connection.status().state)).arg(focused ? "yes" : "no").arg(session.active() ? "active" : "idle");
-            painter.fillRect(QRect(8, 8, painter.fontMetrics().horizontalAdvance(text) + 16, 28), QColor(0,0,0,190));
-            painter.setPen(Qt::white); painter.drawText(16, 27, text);
-        }
         painter.restore();
     }
 };
@@ -278,5 +360,6 @@ OpenAxisController::OpenAxisController(GLArea &v) : impl(std::make_unique<Impl>(
 OpenAxisController::~OpenAxisController() = default;
 void OpenAxisController::refresh() { impl->refresh(); }
 void OpenAxisController::paint(QPainter &p) { impl->paint(p); }
+void OpenAxisController::sampleDepth() { impl->sampleDepth(); }
 
 #include "openaxis_controller.moc"

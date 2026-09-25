@@ -578,6 +578,9 @@ void GLArea::paintEvent(QPaintEvent* /*event*/)
 
     glPopMatrix(); // We restore the state to immediately after the trackball (and before the bbox scaling/translating)
 
+#ifdef MESHLAB_OPENAXIS
+    if (openaxisController) openaxisController->sampleDepth();
+#endif
     if(trackBallVisible && !takeSnapTile && !(iEdit && !suspendedEditor))
         trackball.DrawPostApply();
 

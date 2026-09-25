@@ -10,6 +10,7 @@ public:
     ~OpenAxisController();
     void refresh();
     void paint(QPainter &);
+    void sampleDepth();
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;

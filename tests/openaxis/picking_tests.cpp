@@ -1,55 +1,105 @@
-#include <vcg/complex/complex.h>
+#include <QApplication>
+#include <QGLPixelBuffer>
+#include <QOpenGLContext>
+#include <QOpenGLFunctions>
 #include "openaxis_picking.h"
 #include <chrono>
+#include <fstream>
 #include <iostream>
+#include <sstream>
+#include <vector>
 
-class Vertex;
-class Face;
-struct Types : vcg::UsedTypes<vcg::Use<Vertex>::AsVertexType, vcg::Use<Face>::AsFaceType> {};
-class Vertex : public vcg::Vertex<Types, vcg::vertex::Coord3f, vcg::vertex::BitFlags> {};
-class Face : public vcg::Face<Types, vcg::face::VertexRef, vcg::face::Normal3f, vcg::face::BitFlags> {};
-class Mesh : public vcg::tri::TriMesh<std::vector<Vertex>, std::vector<Face>> {};
-
-int main() {
-    Mesh mesh;
-    constexpr int side = 64;
-    vcg::tri::Allocator<Mesh>::AddVertices(mesh, (side+1)*(side+1));
-    vcg::tri::Allocator<Mesh>::AddFaces(mesh, side*side*2);
-    for (int y=0; y<=side; ++y) for (int x=0; x<=side; ++x) {
-        auto &v = mesh.vert[y*(side+1)+x];
-        v.P() = vcg::Point3f(float(x),float(y),0);
-        mesh.bbox.Add(v.P());
+int main(int argc, char **argv) {
+    QApplication app(argc,argv);
+    QGLFormat format; format.setDepth(true);
+    QGLPixelBuffer buffer(256,256,format);
+    if (!buffer.isValid() || !buffer.makeCurrent()) {
+        std::cerr << "No OpenGL test context available\n"; return 77;
     }
-    for (int y=0; y<side; ++y) for (int x=0; x<side; ++x) {
-        const int a=y*(side+1)+x, b=a+1, c=a+side+1, d=c+1;
-        auto &f = mesh.face[2*(y*side+x)], &g = mesh.face[2*(y*side+x)+1];
-        f.V(0)=&mesh.vert[a]; f.V(1)=&mesh.vert[b]; f.V(2)=&mesh.vert[d];
-        g.V(0)=&mesh.vert[a]; g.V(1)=&mesh.vert[d]; g.V(2)=&mesh.vert[c];
-        f.N()=g.N()=vcg::Point3f(0,0,1);
-    }
-    mesh.face[2].SetS();
-    meshlab_openaxis::MeshPicker<Mesh> picker(mesh);
-    const auto start=std::chrono::steady_clock::now();
-    for (int i=0; i<1000; ++i) {
-        const float x=float(i%side)+.25f, y=float((i/side)%side)+.5f;
-        const auto hit=picker.pick(mesh,{x,y,10},{0,0,-1});
-        if (!hit || (*hit-vcg::Point3f(x,y,0)).Norm()>1e-4f) {
-            std::cerr << "Pick failed at " << x << ',' << y << ": " << (hit ? "wrong position" : "no hit") << '\n';
-            if (hit) std::cerr << hit->X() << ',' << hit->Y() << ',' << hit->Z() << '\n';
-            return 1;
+    glViewport(0,0,256,256);
+    glEnable(GL_DEPTH_TEST);
+    glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(-1,1,-1,1,-2,2);
+    glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+    glClearDepth(1); glClear(GL_DEPTH_BUFFER_BIT);
+    if (meshlab_openaxis::pickDepth(128,128)) return 1;
+    glBegin(GL_TRIANGLES); glVertex3f(-1,-1,0); glVertex3f(1,-1,0); glVertex3f(0,1,0); glEnd();
+    auto hit=meshlab_openaxis::pickDepth(128,128);
+    if (!hit || hit->Norm()>1e-4) return 2;
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glPointSize(9);
+    glBegin(GL_POINTS); glVertex3f(0,0,.5f); glEnd();
+    hit=meshlab_openaxis::pickDepth(128,128);
+    if (!hit || std::abs(hit->Z()-.5)>1e-4 || meshlab_openaxis::pickDepth(16,16)) return 3;
+    // Pick a point whose center is outside the sampled pixel but whose rendered
+    // radius covers it. Selection-only depth must not overwrite the scene depth.
+    hit=meshlab_openaxis::pickLayerDepth(128,128,[] {
+        glPointSize(9);
+        glBegin(GL_POINTS); glVertex3f(3.f/128.f,0,-.5f); glEnd();
+    });
+    if (!hit || std::abs(hit->Z()+.5)>1e-4) return 9;
+    hit=meshlab_openaxis::pickDepth(128,128);
+    if (!hit || std::abs(hit->Z()-.5)>1e-4) return 10;
+    const int viewport[4]={10,20,800,600};
+    auto pixel=meshlab_openaxis::depthPixel(100,50,400,300,viewport);
+    if (!pixel || (*pixel)[0]!=210 || (*pixel)[1]!=519 || meshlab_openaxis::depthPixel(-1,0,400,300,viewport)) return 4;
+    std::cout << "Native depth picking: triangle, point cloud, selection depth isolation, background and HiDPI mapping passed\n";
+    if (argc>1) {
+        // Optional regression input: the reported binary little-endian PLY with
+        // float XYZ vertices and uchar/int triangle lists. Never modifies it.
+        std::ifstream file(argv[1],std::ios::binary);
+        std::string line; size_t vertices=0, faces=0;
+        bool binary=false;
+        while (std::getline(file,line)) {
+            if (line=="format binary_little_endian 1.0") binary=true;
+            std::istringstream fields(line); std::string a,b;
+            fields>>a>>b;
+            if(a=="element" && b=="vertex") fields>>vertices;
+            if(a=="element" && b=="face") fields>>faces;
+            if(line=="end_header") break;
         }
+        if (!file || !binary || !vertices || !faces) return 5;
+        std::vector<float> positions(vertices*3);
+        file.read(reinterpret_cast<char*>(positions.data()),positions.size()*sizeof(float));
+        std::vector<unsigned int> indices(faces*3);
+        for (size_t i=0;i<faces;++i) {
+            unsigned char count=0; file.read(reinterpret_cast<char*>(&count),1);
+            if(count!=3) return 6;
+            file.read(reinterpret_cast<char*>(indices.data()+i*3),3*sizeof(unsigned int));
+        }
+        if(!file) return 7;
+        float low[3]={positions[0],positions[1],positions[2]}, high[3]={low[0],low[1],low[2]};
+        for(size_t i=0;i<vertices;++i) for(int j=0;j<3;++j) {
+            low[j]=std::min(low[j],positions[i*3+j]); high[j]=std::max(high[j],positions[i*3+j]);
+        }
+        float extent=std::max({high[0]-low[0],high[1]-low[1],high[2]-low[2]})*.55f;
+        glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(-extent,extent,-extent,extent,-extent*2,extent*2);
+        glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+        glTranslatef(-(low[0]+high[0])/2,-(low[1]+high[1])/2,-(low[2]+high[2])/2);
+        auto *gl=QOpenGLContext::currentContext()->functions();
+        GLuint buffers[2]; gl->glGenBuffers(2,buffers);
+        gl->glBindBuffer(GL_ARRAY_BUFFER,buffers[0]);
+        gl->glBufferData(GL_ARRAY_BUFFER,positions.size()*sizeof(float),positions.data(),GL_STATIC_DRAW);
+        gl->glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,buffers[1]);
+        gl->glBufferData(GL_ELEMENT_ARRAY_BUFFER,indices.size()*sizeof(unsigned int),indices.data(),GL_STATIC_DRAW);
+        glEnableClientState(GL_VERTEX_ARRAY); glVertexPointer(3,GL_FLOAT,0,nullptr);
+        for (bool points : {false,true}) {
+            glClear(GL_DEPTH_BUFFER_BIT);
+            const auto start=std::chrono::steady_clock::now();
+            if(points) glDrawArrays(GL_POINTS,0,GLsizei(vertices));
+            else glDrawElements(GL_TRIANGLES,GLsizei(indices.size()),GL_UNSIGNED_INT,nullptr);
+            glFinish();
+            const auto rendered=std::chrono::steady_clock::now();
+            int hits=0;
+            for(int y=32;y<256;y+=32) for(int x=32;x<256;x+=32)
+                if(meshlab_openaxis::pickDepth(x,y)) ++hits;
+            const auto finished=std::chrono::steady_clock::now();
+            std::cout << (points ? "Engine points" : "Engine triangles") << ": " << vertices << " vertices, " << faces
+                << " faces; draw " << std::chrono::duration<double,std::milli>(rendered-start).count()
+                << " ms; 49 depth picks " << std::chrono::duration<double,std::milli>(finished-rendered).count()
+                << " ms; hits " << hits << '\n';
+            if(!hits || glGetError()!=GL_NO_ERROR) return 8;
+        }
+        glDisableClientState(GL_VERTEX_ARRAY);
+        gl->glDeleteBuffers(2,buffers);
     }
-    if (picker.pick(mesh,{-1,-1,10},{0,0,-1}) || picker.pick(mesh,{1,1,10},{0,0,1})) return 2;
-    // A rebuilt index must observe moved geometry, without changing selection flags.
-    mesh.bbox.SetNull();
-    for (auto &v : mesh.vert) { v.P().Z()=3; mesh.bbox.Add(v.P()); }
-    meshlab_openaxis::MeshPicker<Mesh> rebuilt(mesh);
-    const auto hit=rebuilt.pick(mesh,{1.25f,1.5f,10},{0,0,-1});
-    if (!hit || std::abs(hit->Z()-3)>1e-4f) return 3;
-    for (size_t i=0; i<mesh.face.size(); ++i) if (mesh.face[i].IsS() != (i==2)) return 4;
-    mesh.face[0].SetD(); mesh.face[1].SetD(); mesh.fn-=2;
-    meshlab_openaxis::MeshPicker<Mesh> deleted(mesh);
-    if (deleted.pick(mesh,{.25f,.5f,10},{0,0,-1})) return 5;
-    std::cout << "Upstream AABB tree: 8192 faces, 1000 repeated picks, misses, deletion and geometry rebuild passed in "
-        << std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count() << " seconds\n";
 }

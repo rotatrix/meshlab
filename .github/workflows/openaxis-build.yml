@@ -56,13 +56,17 @@ jobs:
       - name: Build and install
         run: cmake --build build-ci --parallel 3
       - run: cmake --install build-ci
-      - name: Camera mapping tests
+      - name: Camera, depth picking and scheduler tests
         shell: bash
         run: |
           set -euo pipefail
           cmake -S tests/openaxis -B build-tests -G Ninja -DCMAKE_BUILD_TYPE=Release -DOPENAXIS_SOURCE_DIR="$PWD/build-ci/_deps/openaxis-src"
           cmake --build build-tests
-          ctest --test-dir build-tests --output-on-failure
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            xvfb-run -a ctest --test-dir build-tests --output-on-failure
+          else
+            ctest --test-dir build-tests --output-on-failure
+          fi
       - name: Deploy Windows runtime
         if: runner.os == 'Windows'
         shell: pwsh
@@ -145,7 +149,7 @@ jobs:
 
           Windows x64, Linux x64 and macOS Intel builds with OpenAxis cpp/v1.0.0-rc.1.
           Uses MeshLab's bundled/core plugins; optional external-library plugins are omitted.
-          Start Rotatrix 1.6+ with an app.meshlab profile. Ctrl+Shift+O toggles viewport status.
+          Start Rotatrix 1.6+ with an app.meshlab profile. Ctrl+Shift+O opens diagnostics with reconnect and log controls.
           Builds are unsigned. Device navigation and GUI testing are required before publishing.
 
           Build run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
