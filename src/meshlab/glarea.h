@@ -52,6 +52,7 @@ enum LightingModel{LDOUBLE,LFANCY};
 
 class MeshModel;
 class MainWindow;
+class OpenAxisController;
 
 class GLArea : public QGLWidget
 {
@@ -65,6 +66,8 @@ public:
     static void initGlobalParameterList(RichParameterList& /*globalparam*/);
 
 private:
+    friend class OpenAxisController;
+    OpenAxisController *openaxisController = nullptr;
     int id;  //the very important unique id of each subwindow.
     MultiViewer_Container* parentmultiview;
 	//MLSceneGLSharedDataContext::PerMeshRenderingDataMap  _oldvalues;

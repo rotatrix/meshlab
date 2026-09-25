@@ -26,6 +26,9 @@
 #include <common/GLExtensionsManager.h>
 
 #include "glarea.h"
+#ifdef MESHLAB_OPENAXIS
+#include "openaxis_controller.h"
+#endif
 #include "mainwindow.h"
 #include "multiViewer_Container.h"
 #include "ml_default_decorators.h"
@@ -125,10 +128,16 @@ GLArea::GLArea(QWidget *parent, MultiViewer_Container *mvcont, RichParameterList
         qDebug("The parent of the GLArea parent is not a pointer to the meshlab MainWindow.");
     }
 	lastloadedraster = -1;
+#ifdef MESHLAB_OPENAXIS
+    openaxisController = new OpenAxisController(*this);
+#endif
 }
 
 GLArea::~GLArea()
 {
+#ifdef MESHLAB_OPENAXIS
+    delete openaxisController;
+#endif
 }
 
 /*
@@ -425,6 +434,9 @@ int GLArea::RenderForSelection(int pickX, int pickY)
 
 void GLArea::paintEvent(QPaintEvent* /*event*/)
 {
+#ifdef MESHLAB_OPENAXIS
+    if (openaxisController) openaxisController->refresh();
+#endif
     if (mvc() == NULL)
         return;
     QPainter painter(this);
@@ -673,6 +685,9 @@ void GLArea::paintEvent(QPaintEvent* /*event*/)
     glFinish();
     painter.endNativePainting();
 
+#ifdef MESHLAB_OPENAXIS
+    if (openaxisController) openaxisController->paint(painter);
+#endif
     emit currentViewerRefreshed();
 }
 

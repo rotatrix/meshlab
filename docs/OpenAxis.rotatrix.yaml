@@ -1,0 +1,6 @@
+# Optional profile: paste into a Rotatrix profile using <> (Edit as YAML).
+include_template: orbit_momentary
+description: >-
+  MeshLab camera navigation. Hold Win (Windows), Ctrl (Mac), or Super
+  (Linux) to orbit; btn4 pans and Shift swaps orbit/pan.
+triggers: ["tag:app.meshlab"]

@@ -80,6 +80,7 @@ target_link_libraries(
 	)
 
 set_property(TARGET meshlab PROPERTY FOLDER Core)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/OpenAxis.cmake)
 if (APPLE)
 	set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/images/meshlab.icns PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
 	file(COPY ${MESHLAB_RESOURCES_DIR}/icons/meshlab.icns DESTINATION "${MESHLAB_BUILD_DISTRIB_DIR}/meshlab.app/Contents/Resources/")
