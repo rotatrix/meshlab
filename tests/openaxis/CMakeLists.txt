@@ -35,3 +35,8 @@ target_include_directories(overlay_tests PRIVATE
     "${OPENAXIS_JSON_INCLUDE_DIR}")
 target_link_libraries(overlay_tests PRIVATE Qt5::Widgets)
 add_test(NAME openaxis_visual_diagnostics COMMAND overlay_tests)
+add_executable(focus_tests focus_tests.cpp)
+target_compile_features(focus_tests PRIVATE cxx_std_17)
+target_include_directories(focus_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../src/meshlab")
+target_link_libraries(focus_tests PRIVATE Qt5::Widgets)
+add_test(NAME openaxis_viewport_focus COMMAND focus_tests)

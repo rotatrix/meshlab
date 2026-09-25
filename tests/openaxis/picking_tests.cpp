@@ -11,13 +11,21 @@
 #include <vector>
 
 int runTests(int argc, char **argv) {
+    // The tested renderer uses desktop GL/GLU, as MeshLab does. Do not allow
+    // a headless Windows runner to substitute an ANGLE/OpenGL ES context.
+    QCoreApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
     QApplication app(argc,argv);
     QGLFormat format; format.setDepth(true);
     QGLPixelBuffer buffer(256,256,format);
     if (!buffer.isValid() || !buffer.makeCurrent()) {
         std::cerr << "No OpenGL test context available\n"; return 77;
     }
-    std::cout << "OpenGL renderer: " << glGetString(GL_RENDERER) << "; version: " << glGetString(GL_VERSION) << '\n';
+    auto *context=QOpenGLContext::currentContext();
+    const auto *version=glGetString(GL_VERSION);
+    if (!context || context->isOpenGLES() || !version) {
+        std::cerr << "No compatible desktop OpenGL test context available\n"; return 77;
+    }
+    std::cout << "OpenGL version: " << version << std::endl;
     if (!QGLFramebufferObject::hasOpenGLFramebufferObjects()) {
         std::cerr << "Runner has no framebuffer-object support for selection-depth tests\n"; return 77;
     }

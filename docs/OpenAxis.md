@@ -35,8 +35,15 @@ Perspective and orthographic poses map to the native trackball, including its
 scale and nonzero center. Native mouse navigation remains available. Only the
 current, visible viewport in the active window accepts input; modal dialogs,
 popups, raster mode, mesh editors, snapshots and busy documents suspend navigation.
-Scene changes and viewport changes invalidate gestures. Each viewport owns its
-connection and queued callbacks are invalidated on shutdown.
+Scene changes and viewport changes invalidate gestures. One shared connection
+and navigation session serve all document windows and split panes in a MeshLab
+process. The active main window's current document and pane select the target;
+document-local current-pane flags cannot independently claim focus. Switching
+targets cancels the old gesture and changes its context generation, so delayed
+requests cannot act on a previous or closed viewport. Losing application focus
+reports unfocused while the transport and retry scheduler continue running.
+The last viewport closing tears down the connection. Separate MeshLab processes
+have separate connections and process IDs.
 
 Model bounds use visible transformed meshes. Selection bounds currently mean the
 active mesh layer. Cursor and viewport-center picks use MeshLab's upstream

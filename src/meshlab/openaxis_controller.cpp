@@ -3,11 +3,13 @@
 #include <openaxis/logging.hpp>
 #include "openaxis_overlay.h"
 #include "glarea.h"
+#include "mainwindow.h"
 #include "openaxis_controller.h"
 #include "openaxis_camera.h"
 #include "openaxis_picking.h"
 #include "openaxis_pivot.h"
 #include "openaxis_scheduler.h"
+#include "openaxis_focus.h"
 #include <QApplication>
 #include <QClipboard>
 #include <QImage>
@@ -52,14 +54,45 @@ openaxis::OpenAxisClientOptions options(openaxis::Scheduler *scheduler) {
 }
 
 struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
+    // One protocol endpoint per process. Viewports retain only their native
+    // camera/rendering state; the shared adapter binds a gesture to one of them.
+    struct Hub final : QObject, openaxis::NavigationAdapter {
+        meshlab_openaxis::QtScheduler scheduler;
+        openaxis::OpenAxisClient client;
+        openaxis::NavigationDiagnostics collector;
+        openaxis::NavigationSession session;
+        openaxis::OpenAxisConnectionManager connection;
+        QTimer timer;
+        std::vector<Impl *> views;
+        Impl *current = nullptr;
+        std::uint64_t epoch = 0;
+        bool refreshing = false, announcedFocus = false;
+        Hub();
+        ~Hub();
+        void refresh();
+        void remove(Impl *);
+        bool eventFilter(QObject *, QEvent *) override;
+        openaxis::NavigationContext capture_context() override;
+        bool is_current(const openaxis::NavigationContext &) override;
+        std::unique_ptr<openaxis::NavigationCapture> begin_query(const openaxis::NavigationContext &) override;
+        openaxis::WriteResult apply_pose(const openaxis::NavigationContext &, const openaxis::NavigationPose &,
+                                        const openaxis::Value &, std::optional<openaxis::Vec3>) override;
+        void show_pivot(const openaxis::NavigationContext &, std::optional<openaxis::Vec3>) override;
+    };
+    static std::shared_ptr<Hub> sharedHub() {
+        static std::weak_ptr<Hub> shared;
+        auto result=shared.lock();
+        if (!result) { result=std::make_shared<Hub>(); shared=result; }
+        return result;
+    }
     GLArea &view;
-    meshlab_openaxis::QtScheduler scheduler;
+    std::shared_ptr<Hub> hub;
+    meshlab_openaxis::QtScheduler &scheduler;
     SceneObserver sceneObserver;
-    openaxis::OpenAxisClient client;
-    openaxis::NavigationDiagnostics collector;
-    openaxis::NavigationSession session;
-    openaxis::OpenAxisConnectionManager connection;
-    QTimer timer;
+    openaxis::OpenAxisClient &client;
+    openaxis::NavigationDiagnostics &collector;
+    openaxis::NavigationSession &session;
+    openaxis::OpenAxisConnectionManager &connection;
     bool focused = false;
     QPointer<QDialog> diagnostics;
     QPointer<QLabel> statusLabel;
@@ -74,23 +107,13 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
     QPointF pickPixel;
     openaxis::Value pickResult;
 
-    explicit Impl(GLArea &v) : view(v), client(options(&scheduler)),
-        session(client, *this, &collector, [this] {
-            openaxis::NavigationOptions o;
-            o.scheduler = &scheduler;
-            o.observation = [this](const openaxis::NavigationContext &c) { return is_current(c) ? read() : std::nullopt; };
-            return o;
-        }()), connection(client, {[this] {
-            openaxis::ConnectionMetadata m;
-            m.tags = {"app.meshlab", "workspace.modeling"};
-            m.capabilities = {"navigation"}; m.focused = focused;
-            return m;
-        }}) {
-        scheduler.beforeDispatch = [this] { refresh(); };
-        QObject::connect(&timer, &QTimer::timeout, &scheduler, [this] { refresh(); });
-        timer.start(100);
+    explicit Impl(GLArea &v) : view(v), hub(sharedHub()), scheduler(hub->scheduler),
+        client(hub->client), collector(hub->collector), session(hub->session), connection(hub->connection) {
+        hub->views.push_back(this);
         sceneObserver.changed = [this] {
-            ++revision; session.cancel("scene_changed"); pivot.reset();
+            ++revision;
+            if (hub->current==this) session.cancel("scene_changed");
+            pivot.reset(); view.update();
         };
         QObject::connect(view.md(), SIGNAL(meshSetChanged()), &sceneObserver, SLOT(notify()));
         QObject::connect(view.md(), SIGNAL(meshDocumentModified()), &sceneObserver, SLOT(notify()));
@@ -98,25 +121,20 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         QObject::connect(view.md(), SIGNAL(currentMeshChanged(int)), &sceneObserver, SLOT(notify()));
         auto *shortcut = new QShortcut(QKeySequence("Ctrl+Shift+O"), &view);
         shortcut->setContext(Qt::WidgetWithChildrenShortcut);
-        QObject::connect(shortcut, &QShortcut::activated, &scheduler, [this] { toggleDiagnostics(); });
-        connection.on_state = [this](const openaxis::ConnectionStatus &) { updateDiagnostics(); };
-        collector.on_changed = [this] { updateDiagnostics(); view.update(); };
-        connection.start();
+        QObject::connect(shortcut, &QShortcut::activated, &sceneObserver, [this] { toggleDiagnostics(); });
     }
     ~Impl() override {
-        timer.stop(); scheduler.beforeDispatch = {};
-        collector.on_changed = {};
+        hub->remove(this);
         delete diagnostics.data();
-        connection.stop(); session.close();
     }
     QString logPath() const {
         return QString::fromStdString(openaxis::DiagnosticLog::configure("meshlab")->path().u8string());
     }
     QString statusText() const {
         const auto s = connection.status();
-        QString result = QString("Connection: %1\nEndpoint: %2\nViewport focus: %3 | Gesture: %4")
+        QString result = QString("Connection: %1 (shared by all viewports)\nEndpoint: %2\nViewport focus: %3 | Gesture: %4")
             .arg(QString::fromStdString(s.state), QString::fromStdString(client.url()),
-                 focused ? "active" : "inactive", session.active() ? "active" : "idle");
+                 focused ? "active" : "inactive", hub->current==this && session.active() ? "active" : "idle");
         if (!s.error.empty()) result += "\nLast connection error: " + QString::fromStdString(s.error);
         if (s.retry_at) result += QString("\nAutomatic retry in %1 s").arg(std::max(0., *s.retry_at-openaxis::diagnostic_time()), 0, 'f', 1);
         result += "\nLog: " + logPath();
@@ -150,7 +168,7 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
             auto addButton = [&](const QString &label, auto callback) {
                 auto *button = new QPushButton(label, diagnostics);
                 buttons->addWidget(button);
-                QObject::connect(button, &QPushButton::clicked, &scheduler, callback);
+                QObject::connect(button, &QPushButton::clicked, &sceneObserver, callback);
             };
             addButton("Reconnect", [this] { reconnect(); });
             addButton("Copy diagnostics", [this] {
@@ -165,13 +183,13 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
             });
 
             addButton("Close", [this] { diagnostics->close(); });
-            QObject::connect(diagnostics, &QDialog::finished, &scheduler, [this] {
-                collector.set_enabled(false); view.update();
+            QObject::connect(diagnostics, &QDialog::finished, &sceneObserver, [this] {
+                if (hub->current==this) collector.set_enabled(false);
+                view.update();
             });
             diagnostics->show();
         }
-        collector.set_enabled(diagnostics->isVisible());
-        collector.set_context(key());
+        hub->refresh();
         updateDiagnostics();
         view.update();
     }
@@ -181,11 +199,17 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
             !view._isRaster && !view.takeSnapTile && !view.currentEditor;
     }
     bool active() const {
-        return available() && view.window()->isActiveWindow() &&
-            !QApplication::activeModalWidget() && !QApplication::activePopupWidget();
+        return hub->current==this && eligible();
+    }
+    bool eligible() const {
+        const auto *window=view.mw();
+        return meshlab_openaxis::ownsNavigationFocus(&view,window,window ? window->GLA() : nullptr,available());
     }
     std::string key() const {
-        std::string result = std::to_string(revision) + "/" + std::to_string(view.width()) + "/" +
+        std::string result = std::to_string(hub->epoch) + "/" +
+            std::to_string(reinterpret_cast<std::uintptr_t>(&view)) + "/" +
+            std::to_string(reinterpret_cast<std::uintptr_t>(view.md())) + "/" +
+            std::to_string(revision) + "/" + std::to_string(view.width()) + "/" +
             std::to_string(view.height()) + "/" + std::to_string(view.devicePixelRatioF());
         for (auto it = view.meshVisibilityMap.cbegin(); it != view.meshVisibilityMap.cend(); ++it)
             result += "/" + std::to_string(it.key()) + (it.value() ? ":1" : ":0");
@@ -203,7 +227,10 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         return p;
     }
     void refresh() {
-        collector.set_enabled(available() && (diagnostics && diagnostics->isVisible()));
+        hub->refresh();
+    }
+    void refreshCurrent() {
+        collector.set_enabled(diagnostics && diagnostics->isVisible());
         if (overlayExpiry && openaxis::diagnostic_time() >= *overlayExpiry) {
             overlayExpiry.reset(); view.update();
         }
@@ -212,7 +239,7 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         if (context != lastContext || (focused && !now)) {
             session.cancel("viewport_changed"); pivot.reset(); lastContext = context;
         }
-        if (focused != now) { focused = now; connection.refresh_metadata(); }
+        focused = now;
         if (auto p = read()) {
             const auto value = openaxis::pose_value(*p);
             if (!lastPose.is_null() && value != lastPose && focused) session.native_camera_changed();
@@ -227,13 +254,14 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         return k && active() && *k == key();
     }
     struct Capture final : openaxis::NavigationCapture {
-        Impl &owner; openaxis::NavigationContext context; std::optional<openaxis::Pose> initial;
-        Capture(Impl &o, openaxis::NavigationContext c) : owner(o), context(std::move(c)), initial(o.read()) {}
+        std::weak_ptr<Hub> hub; openaxis::NavigationContext context; std::optional<openaxis::Pose> initial;
+        Capture(Impl &o, openaxis::NavigationContext c) : hub(o.hub), context(std::move(c)), initial(o.read()) {}
         std::optional<openaxis::Pose> initial_observation() override { return initial; }
         openaxis::Value resolve(const std::string &name) override {
-            if (!owner.is_current(context)) return nullptr;
+            auto owner=hub.lock();
+            if (!owner || !owner->is_current(context)) return nullptr;
             if (name == "camera.pose") return initial ? openaxis::pose_value(*initial) : openaxis::Value{};
-            return owner.fact(name);
+            return owner->current->fact(name);
         }
     };
     std::unique_ptr<openaxis::NavigationCapture> begin_query(const openaxis::NavigationContext &c) override {
@@ -362,6 +390,113 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         painter.restore();
     }
 };
+
+OpenAxisController::Impl::Hub::Hub() : client(options(&scheduler)),
+    session(client,*this,&collector,[this] {
+        openaxis::NavigationOptions o;
+        o.scheduler=&scheduler;
+        o.observation=[this](const openaxis::NavigationContext &c) {
+            return is_current(c) ? current->read() : std::nullopt;
+        };
+        return o;
+    }()), connection(client,{[this] {
+        openaxis::ConnectionMetadata m;
+        m.tags={"app.meshlab","workspace.modeling"};
+        m.capabilities={"navigation"};
+        m.focused=current && current->eligible();
+        return m;
+    }}) {
+    scheduler.beforeDispatch=[this] { refresh(); };
+    QObject::connect(&timer,&QTimer::timeout,this,[this] { refresh(); });
+    timer.start(100);
+    qApp->installEventFilter(this);
+    QObject::connect(qApp,&QGuiApplication::applicationStateChanged,this,[this] { refresh(); });
+    connection.on_state=[this](const openaxis::ConnectionStatus &) {
+        for (auto *v:views) v->updateDiagnostics();
+    };
+    collector.on_changed=[this] {
+        if (current) current->view.update();
+    };
+    connection.start();
+}
+OpenAxisController::Impl::Hub::~Hub() {
+    qApp->removeEventFilter(this);
+    timer.stop(); scheduler.beforeDispatch={}; collector.on_changed={};
+    connection.stop(); session.close();
+}
+bool OpenAxisController::Impl::Hub::eventFilter(QObject *,QEvent *event) {
+    switch (event->type()) {
+    case QEvent::WindowActivate: case QEvent::WindowDeactivate:
+    case QEvent::FocusIn: case QEvent::FocusOut: case QEvent::MouseButtonPress:
+    case QEvent::Show: case QEvent::Hide:
+        // Native handlers first update MeshLab's active document/current pane.
+        QTimer::singleShot(0,this,[this] { refresh(); });
+        break;
+    default: break;
+    }
+    return false;
+}
+void OpenAxisController::Impl::Hub::remove(Impl *v) {
+    if (current==v) {
+        session.cancel("viewport_closed");
+        ++epoch;
+        current=nullptr;
+        collector.clear();
+    }
+    views.erase(std::remove(views.begin(),views.end(),v),views.end());
+    refresh();
+}
+void OpenAxisController::Impl::Hub::refresh() {
+    if (refreshing) return;
+    refreshing=true;
+    struct Guard { bool &flag; ~Guard() { flag=false; } } guard{refreshing};
+    auto *window=qobject_cast<MainWindow *>(QApplication::activeWindow());
+    // The diagnostics tool temporarily owns keyboard focus but remains bound
+    // to its document. It must not create another transport or move the camera.
+    if (!window) for (auto *v:views)
+        if (v->diagnostics && QApplication::activeWindow()==v->diagnostics)
+            window=v->view.mw();
+    Impl *next=current;
+    if (window) {
+        next=nullptr;
+        for (auto *v:views)
+            if (v->view.mw()==window && window->GLA()==&v->view) { next=v; break; }
+    }
+    if (next!=current) {
+        session.cancel("active_viewport_changed");
+        ++epoch;
+        if (current) { current->focused=false; current->pivot.reset(); current->view.update(); }
+        collector.clear();
+        current=next;
+        if (current) { current->lastPose=nullptr; current->lastContext.clear(); current->view.update(); }
+    }
+    if (current) current->refreshCurrent();
+    const bool focus=current && current->eligible();
+    if (announcedFocus!=focus) {
+        // Publish loss before accepting any further queued work. The metadata
+        // provider also reads actual state when a reconnect handshake completes.
+        announcedFocus=focus;
+        try { connection.refresh_metadata(); }
+        catch (...) { connection.stop(); connection.start(); }
+    }
+    for (auto *v:views) v->updateDiagnostics();
+}
+openaxis::NavigationContext OpenAxisController::Impl::Hub::capture_context() {
+    return current ? current->capture_context() : openaxis::NavigationContext{};
+}
+bool OpenAxisController::Impl::Hub::is_current(const openaxis::NavigationContext &c) {
+    return current && current->is_current(c);
+}
+std::unique_ptr<openaxis::NavigationCapture> OpenAxisController::Impl::Hub::begin_query(const openaxis::NavigationContext &c) {
+    return is_current(c) ? current->begin_query(c) : nullptr;
+}
+openaxis::WriteResult OpenAxisController::Impl::Hub::apply_pose(const openaxis::NavigationContext &c,
+    const openaxis::NavigationPose &p,const openaxis::Value &navigation,std::optional<openaxis::Vec3> pivot) {
+    return is_current(c) ? current->apply_pose(c,p,navigation,pivot) : openaxis::WriteResult{};
+}
+void OpenAxisController::Impl::Hub::show_pivot(const openaxis::NavigationContext &c,std::optional<openaxis::Vec3> pivot) {
+    if (current && (!pivot || is_current(c))) current->show_pivot(c,pivot);
+}
 
 OpenAxisController::OpenAxisController(GLArea &v) : impl(std::make_unique<Impl>(v)) {}
 OpenAxisController::~OpenAxisController() = default;
