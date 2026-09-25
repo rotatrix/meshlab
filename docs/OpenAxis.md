@@ -38,7 +38,8 @@ cmake -S . -B build-local/app -G "Visual Studio 17 2022" -A x64 `
   -DMESHLAB_OPENAXIS=ON -DVCG_ALLOW_SYSTEM_EIGEN=OFF `
   -DMESHLAB_BUILD_MINI=ON `
   "-DMESHLAB_PLUGINS=meshlabplugins/io_base;meshlabplugins/filter_create"
-cmake --build build-local/app --config Release --target meshlab io_base filter_create --parallel 6
+cmake --build build-local/app --config Release --parallel 6
+cmake --build build-local/app --config Release --target io_base filter_create --parallel 6
 cmake --install build-local/app --config Release --prefix build-local/install
 C:/path/to/Qt/5.15.2/msvc2019_64/bin/windeployqt.exe --release build-local/install/meshlab.exe
 ```

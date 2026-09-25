@@ -69,8 +69,10 @@ jobs:
         run: |
           windeployqt --release --compiler-runtime install/meshlab.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $crt = Join-Path $env:VCToolsRedistDir 'x64/Microsoft.VC143.CRT/*.dll'
+          Copy-Item $crt install/
           Copy-Item LICENSE.txt install/
-          Copy-Item docs/OpenAxis.md install/
+          Copy-Item docs/OpenAxis.md,docs/OpenAxis.rotatrix.yaml install/
       - name: Deploy macOS runtime
         if: runner.os == 'macOS'
         run: macdeployqt install/meshlab.app -always-overwrite
@@ -81,7 +83,7 @@ jobs:
           set -euo pipefail
           # Qt is distributed with this portable preview; system GL and X11 remain host dependencies.
           mkdir -p install/lib/qt install/plugins
-          cp -a "$QT_ROOT_DIR/lib/"libQt5*.so* install/lib/qt/
+          cp -a "$QT_ROOT_DIR/lib/"*.so* install/lib/qt/
           cp -a "$QT_ROOT_DIR/plugins/platforms" "$QT_ROOT_DIR/plugins/imageformats" install/plugins/
           cat > install/MeshLab.sh <<'EOF'
           #!/bin/sh
@@ -91,7 +93,7 @@ jobs:
           exec "$ROOT/bin/meshlab" "$@"
           EOF
           chmod +x install/MeshLab.sh
-          cp LICENSE.txt docs/OpenAxis.md install/
+          cp LICENSE.txt docs/OpenAxis.md docs/OpenAxis.rotatrix.yaml install/
       - name: Package loader smoke check
         shell: bash
         run: |
@@ -99,7 +101,7 @@ jobs:
           case "$RUNNER_OS" in
             Windows) ./install/meshlab.exe --version ;;
             macOS) ./install/meshlab.app/Contents/MacOS/meshlab --version ;;
-            Linux) ./install/MeshLab.sh --version ;;
+            Linux) env -u LD_LIBRARY_PATH -u QT_PLUGIN_PATH ./install/MeshLab.sh --version ;;
           esac
       - name: Archive
         shell: bash
