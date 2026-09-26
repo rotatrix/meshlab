@@ -107,7 +107,8 @@ release or tag. A missing desktop GL context explicitly skips the GL-only tests.
 When ready, clean up the downstream patch stack and create maintained branch
 `rotatrix/MeshLab-2025.07`; set that branch as the GitHub default at that time.
 Contributions target that maintained branch. Its published history is append-only.
-The repository default remains `main` while no maintained Rotatrix branch exists.
+The repository default is currently `rotatrix/work/MeshLab-2025.07` by explicit
+maintainer choice. It remains a disposable work branch, not a maintained release.
 
 `CreateRelease.yml` runs only for explicit `*-rotatrix.*` tags, using the same
 upstream build/deploy path. Stable tags such as `MeshLab-2025.07-rotatrix.1` must
