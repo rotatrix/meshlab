@@ -91,6 +91,34 @@ ctest --test-dir build-local/tests -C Release --output-on-failure
 
 ## CI and releases
 
+### Upstream workflow baseline and compatibility changes
+
+The source, composite actions and platform scripts start at official tag
+`MeshLab-2025.07` (commit `dc48b91ae562756a6988048c5d5c7f1d2b687256`).
+The upstream setup/build/deploy sequence, plugins, two precision variants and
+portable/installer/AppImage/DMG packaging are retained. We do not import upstream
+main's workflow wholesale.
+
+| Area | Release-tag baseline | Current adaptation and reason |
+| --- | --- | --- |
+| macOS Intel | `macos-13` | `macos-15-intel`, replacing the old hosted image; Xcode 16.4 selected explicitly. |
+| macOS ARM64 | Moving `macos-latest` | Explicit `macos-15`, with Xcode 16.4; preserves the upstream Homebrew Qt path. |
+| Linux | Ubuntu 22.04 x64 and ARM64 | Same runners; system Qt on both, following upstream's later Linux setup correction. |
+| Windows | Moving `windows-latest` | Explicit `windows-2022`, using MSVC and Qt 5.15.2. |
+| U3D | 1.5.1 | Upstream commit `0c81769d8bc30bf26be7aa98d741f5248f0a7a01` backported as `1905ce181`: U3D 1.5.2 fixes removed `fp.h` and zlib header compatibility with current macOS SDKs. |
+| Build tools | Runner-provided CMake and Qt installer action v3 | CMake 3.31.6 satisfies the SDK's CMake 3.24 minimum without adopting CMake 4; Qt installer action v4 retains Qt 5.15.2 where upstream uses that installer. |
+| OpenAxis | No SDK | Adds its pinned dependency, OpenSSL setup and regression tests; leaves upstream application build/package scripts in control. |
+
+Runner image labels do not freeze image contents, and Homebrew packages remain
+rolling dependencies. Record new compatibility changes here instead of silently
+changing the release baseline. The U3D backport passed compilation and all five
+tests on both macOS architectures and precisions in run `36206801340`; that run
+then exposed a Bash empty-array error in the downstream deployment wrapper.
+The wrapper now uses nonempty positional arguments compatible with macOS Bash.
+Packaging validation remains pending the next CI run.
+
+### Branches, artifacts and releases
+
 See [the fork workflow spec](RotatrixForkWorkflow.md). This integration is still
 work in progress: `rotatrix/work/MeshLab-2025.07`. No maintained branch or final
 release tag has been created. The earlier remote `rotatrix/main` branch has been retired. Its existing draft

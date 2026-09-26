@@ -38,6 +38,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Select validated macOS toolchain
+        if: runner.os == 'macOS'
+        run: sudo xcode-select --switch /Applications/Xcode_16.4.app/Contents/Developer
       - name: Setup Environment
         uses: ./.github/actions/0_setup
         with:

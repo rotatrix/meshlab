@@ -54,17 +54,21 @@ runs:
       env:
         WIN_CERTIFICATE: ${{ inputs.win-certificate }}
         WIN_PASSWORD: ${{ inputs.win-certificate-pssw }}
+        QT_OPTION: ${{ steps.envs.outputs.qt-option }}
       shell: bash
       run: |
         set -euo pipefail
-        args=()
+        # macOS ships Bash 3.2: an empty array with nounset is an error.
+        # Keep the command nonempty and preserve each argument's quoting.
+        set -- bash "scripts/${RUNNER_OS}/2_deploy.sh"
+        if [[ -n "$QT_OPTION" ]]; then set -- "$@" "$QT_OPTION"; fi
         if [[ "$RUNNER_OS" == Windows && -n "$WIN_CERTIFICATE" ]]; then
           certificate=$(mktemp "$RUNNER_TEMP/meshlab-signing-XXXXXX.pfx")
           trap 'rm -f "$certificate"' EXIT
           printf '%s' "$WIN_CERTIFICATE" | base64 --decode > "$certificate"
-          args+=("--cert_file=$certificate" "--cert_pssw=$WIN_PASSWORD")
+          set -- "$@" "--cert_file=$certificate" "--cert_pssw=$WIN_PASSWORD"
         fi
-        bash scripts/${{ runner.os }}/2_deploy.sh ${{ steps.envs.outputs.qt-option }} "${args[@]}"
+        "$@"
     - name: Verify Windows signatures
       if: runner.os == 'Windows' && inputs.win-certificate != ''
       shell: pwsh
