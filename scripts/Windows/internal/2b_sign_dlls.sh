@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 SCRIPTS_PATH="$(dirname "$(realpath "$0")")"/..
 INSTALL_PATH=$SCRIPTS_PATH/../../install
@@ -38,5 +39,5 @@ for file in $(find $INSTALL_PATH -name '*.dll' -or -name '*.exe');
 do
     FILE_REL=$(realpath --relative-to=$INSTALL_PATH $file) # relative path
     FILE_WIN=$(echo "$FILE_REL" | sed 's/^\///' | sed 's/\//\\/g')  # win relative path
-    signtool.exe sign //fd SHA256 //f $CERT_WIN //p $CERT_PSSW //t http://timestamp.comodoca.com/authenticode $FILE_WIN
+    signtool.exe sign //fd SHA256 //f "$CERT_WIN" //p "$CERT_PSSW" //tr http://timestamp.digicert.com //td SHA256 "$FILE_WIN"
 done

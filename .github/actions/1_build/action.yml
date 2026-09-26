@@ -21,7 +21,6 @@ inputs:
   nightly:
     description: 'Nightly build'
     required: false
-    type: boolean
     default: false
 
 runs:

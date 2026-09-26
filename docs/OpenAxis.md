@@ -1,6 +1,6 @@
 # MeshLab / Rotatrix OpenAxis preview
 
-Branch `rotatrix/main` integrates the OpenAxis C++ SDK release `cpp/v1.0.0-rc.1`
+Work branch `rotatrix/work/MeshLab-2025.07` (based directly on upstream tag `MeshLab-2025.07`) integrates the OpenAxis C++ SDK release `cpp/v1.0.0-rc.1`
 (commit `acc4da095cde6747556245b4b6c110c16b968b6b`). The design follows
 `rotatrix/PrusaSlicer`'s `backport-2.9.6` integration: the SDK owns WebSocket
 transport, connection retries, gesture coordination and reconciliation; a host
@@ -74,7 +74,7 @@ C:/path/to/Qt/5.15.2/msvc2019_64/bin/windeployqt.exe --release build-local/insta
 ```
 
 This quick local build has common mesh import/export and primitive creation.
-The CI preview builds all plugins that do not need optional external libraries.
+CI uses the upstream build scripts and their normal dependency/plugin selection.
 For a full upstream plugin build, omit `MESHLAB_BUILD_MINI` and `MESHLAB_PLUGINS`,
 and leave `MESHLAB_ALLOW_OPTIONAL_EXTERNAL_LIBRARIES` enabled.
 
@@ -91,14 +91,41 @@ ctest --test-dir build-local/tests -C Release --output-on-failure
 
 ## CI and releases
 
-`.github/workflows/openaxis-build.yml` runs on pushes and pull requests to
-`rotatrix/main`, and supports manual dispatch. It compiles Windows x64, Linux x64
-and macOS Intel packages, runs camera, depth-picking, visual-overlay and scheduler tests, and uploads artifacts.
-Depth-picking tests report a skip if the runner cannot create an OpenGL context.
-Only successful non-PR runs on `rotatrix/main` create a **draft prerelease** with
-all three archives attached. Nothing is automatically published. Packages are
-unsigned; the Linux preview requires the usual system OpenGL/X11 libraries.
+See [the fork workflow spec](RotatrixForkWorkflow.md). This integration is still
+work in progress: `rotatrix/work/MeshLab-2025.07`. No maintained branch or final
+release tag has been created. The earlier `rotatrix/main` branch and its draft
+preview releases are legacy test snapshots; new development happens on the work branch.
 
-Before publishing, test rotation, pan, zoom, native-mouse continuation, both
-projections, reconnect, application/modal focus, multiple viewports, mesh changes,
-and closing the application while a gesture is active with a physical device.
+`BuildMeshLab.yml` reuses upstream's setup/build/deploy composite actions and
+platform scripts. Pushes to `rotatrix/**`, PRs to `rotatrix/*`, and manual runs
+build Linux x64/ARM64, macOS Intel/ARM64, and Windows x64, in both upstream
+single- and double-precision configurations. It runs the OpenAxis regressions,
+then uploads upstream portable bundles and installers/AppImages/DMGs as artifacts
+named with the source SHA, retained for 14 days. Work-branch pushes create no
+release or tag. A missing desktop GL context explicitly skips the GL-only tests.
+
+When ready, clean up the downstream patch stack and create maintained branch
+`rotatrix/MeshLab-2025.07`; set that branch as the GitHub default at that time.
+Contributions target that maintained branch. Its published history is append-only.
+The repository default remains `main` while no maintained Rotatrix branch exists.
+
+`CreateRelease.yml` runs only for explicit `*-rotatrix.*` tags, using the same
+upstream build/deploy path. Stable tags such as `MeshLab-2025.07-rotatrix.1` must
+point into the matching maintained branch and descend from the upstream tag.
+Permanent test releases use `MeshLab-2025.07-rotatrix.1-beta.1` and are published
+as prereleases. Existing release assets are never overwritten. Do not move or
+delete release tags; increase the suffix instead. No release tag is created by CI.
+
+Stable releases require the existing upstream signing secrets:
+`MACOS_CERTIFICATE` (base64), `MACOS_CERT_ID`, `MACOS_CERTIFICATE_PSSW`,
+`MACOS_NOTARIZATION_USER`, `MACOS_NOTARIZATION_TEAM_ID`,
+`MACOS_NOTARIZATION_PSSW`, `WIN_CERTIFICATE` (base64 PFX), and
+`WIN_CERTIFICATE_PSSW`. These are not configured on the fork yet. Stable release
+validation fails clearly until they are supplied. Work artifacts and beta builds
+can be unsigned; PR runs receive no signing credentials. The Windows path uses
+upstream's signing/installer scripts and verifies signatures; macOS uses upstream's
+sign-and-notarize action before making the DMG.
+
+Before tagging, test rotation, pan, zoom, native-mouse continuation, both
+projections, reconnect, application/modal focus, multiple documents/viewports,
+mesh and point-cloud changes, and closing during a gesture with a physical device.

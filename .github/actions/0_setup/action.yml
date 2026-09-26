@@ -5,7 +5,6 @@ inputs:
   use-jurpel-qt-action:
     description: 'Use jurpel/qt-action'
     required: false
-    type: boolean
     default: true
   qt-version:
     description: 'Qt Version'
@@ -16,6 +15,7 @@ runs:
   using: "composite"
   steps:
     - name: Setup MSVC
+      if: runner.os == 'Windows'
       uses: ilammy/msvc-dev-cmd@v1
     - name: Check
       shell: bash
@@ -23,7 +23,7 @@ runs:
         echo "Install Qt Action: ${{ inputs.use-jurpel-qt-action }}"
     - name: Install Qt
       if: inputs.use-jurpel-qt-action == 'true'
-      uses: jurplel/install-qt-action@v3
+      uses: jurplel/install-qt-action@v4
       with:
         cache: true
         version: ${{ inputs.qt-version }}

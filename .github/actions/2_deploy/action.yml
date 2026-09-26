@@ -51,10 +51,32 @@ runs:
           echo "qt-option=" >> $GITHUB_OUTPUT
         fi
     - name: Deploy
+      env:
+        WIN_CERTIFICATE: ${{ inputs.win-certificate }}
+        WIN_PASSWORD: ${{ inputs.win-certificate-pssw }}
       shell: bash
       run: |
-        bash scripts/${{ runner.os }}/2_deploy.sh ${{ steps.envs.outputs.qt-option }}
+        set -euo pipefail
+        args=()
+        if [[ "$RUNNER_OS" == Windows && -n "$WIN_CERTIFICATE" ]]; then
+          certificate=$(mktemp "$RUNNER_TEMP/meshlab-signing-XXXXXX.pfx")
+          trap 'rm -f "$certificate"' EXIT
+          printf '%s' "$WIN_CERTIFICATE" | base64 --decode > "$certificate"
+          args+=("--cert_file=$certificate" "--cert_pssw=$WIN_PASSWORD")
+        fi
+        bash scripts/${{ runner.os }}/2_deploy.sh ${{ steps.envs.outputs.qt-option }} "${args[@]}"
+    - name: Verify Windows signatures
+      if: runner.os == 'Windows' && inputs.win-certificate != ''
+      shell: pwsh
+      run: |
+        $files = Get-ChildItem install,packages -Recurse -File | Where-Object { $_.Extension -in '.exe','.dll' }
+        foreach ($file in $files) {
+          if ((Get-AuthenticodeSignature -LiteralPath $file.FullName).Status -ne 'Valid') {
+            throw "Signature verification failed: $($file.Name)"
+          }
+        }
     - name: Sign and Notarize
+      if: runner.os == 'macOS' && inputs.mac-certificate != ''
       uses: cnr-isti-vclab/sign-and-notarize@v1
       with:
         input-path: 'install/*.app'

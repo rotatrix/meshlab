@@ -2,72 +2,124 @@ name: BuildMeshLab
 
 on:
   push:
-    branches-ignore: ['rotatrix/**']
+    branches: ['rotatrix/**']
   pull_request:
+    branches: ['rotatrix/*']
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release-build:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: meshlab-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   QT_VERSION: 5.15.2
-  MAC_CERT: ${{secrets.MACOS_CERT_ID}}
-  MAC_CERT_PSSW: ${{secrets.MACOS_CERTIFICATE_PSSW}}
-  WIN_CERT: ${{secrets.WIN_CERTIFICATE}}
 
 jobs:
   meshlab_build:
-    name: Build MeshLab
+    name: MeshLab ${{ matrix.os }} ${{ matrix.precision }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: ['ubuntu-22.04', 'ubuntu-22.04-arm', 'macos-13', 'macos-latest', 'windows-latest']
+        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-15-intel, macos-15, windows-2022]
         precision: [single_precision, double_precision]
     steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-    - name: Setup Environment
-      uses: ./.github/actions/0_setup
-      with:
-        qt-version: ${{env.QT_VERSION}}
-        use-jurpel-qt-action: ${{matrix.os != 'macos-latest' && matrix.os != 'ubuntu-22.04-arm'}}
-    - name: Setup env variables
-      id: envs
-      shell: bash
-      run: |
-        ARCH=$(uname -m)
-        if [ "${{matrix.precision}}" == "double_precision" ]; then
-          echo "artifact_suffix=_double_$ARCH" >> $GITHUB_OUTPUT
-        else
-          echo "artifact_suffix=_$ARCH" >> $GITHUB_OUTPUT
-        fi
-        if [ "${{matrix.os}}" == "macos-latest" ]; then
-          echo "build_options=--use_brew_qt" >> $GITHUB_OUTPUT
-        else
-          echo "build_options=" >> $GITHUB_OUTPUT
-        fi
-    - name: Build
-      uses: ./.github/actions/1_build
-      with:
-        cache-path: src/external/downloads/*
-        cache-key: external-libraries
-        build-precision: ${{matrix.precision}}
-        build-options: ${{steps.envs.outputs.build_options}}
-        nightly: true
-    - name: Deploy
-      uses: ./.github/actions/2_deploy
-      with:
-        use-brew-qt: ${{matrix.os == 'macos-latest'}}
-        mac-certificate: ${{ secrets.MACOS_CERTIFICATE }}
-        mac-certificate-id: ${{ secrets.MACOS_CERT_ID }}
-        mac-certificate-pssw: ${{ secrets.MACOS_CERTIFICATE_PSSW }}
-        win-certificate: ${{ secrets.WIN_CERTIFICATE }}
-        win-certificate-pssw: ${{ secrets.WIN_CERTIFICATE_PSSW }}
-    - name: Upload MeshLab Portable
-      uses: actions/upload-artifact@v4
-      with:
-        name: MeshLab_${{ runner.os }}_portable${{steps.envs.outputs.artifact_suffix}}
-        path: install/
-    - name: Upload MeshLab Packages
-      uses: actions/upload-artifact@v4
-      with:
-        name: MeshLab_${{ runner.os }}_packages${{steps.envs.outputs.artifact_suffix}}
-        path: packages/MeshLab*
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Setup Environment
+        uses: ./.github/actions/0_setup
+        with:
+          qt-version: ${{ env.QT_VERSION }}
+          use-jurpel-qt-action: ${{ matrix.os != 'macos-15' && runner.os != 'Linux' }}
+      - name: OpenAxis build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install cmake==3.31.6 ninja
+          if [[ "$RUNNER_OS" == Linux ]]; then sudo apt-get install -y libssl-dev xvfb; fi
+          if [[ "$RUNNER_OS" == macOS ]]; then brew install openssl@3; fi
+      - name: Setup build options
+        id: envs
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "artifact_suffix=${{ matrix.precision }}_$(uname -m)" >> "$GITHUB_OUTPUT"
+          if [[ "${{ matrix.os }}" == macos-15 ]]; then
+            echo 'build_options=--use_brew_qt' >> "$GITHUB_OUTPUT"
+            echo "CMAKE_PREFIX_PATH=$(brew --prefix qt@5)" >> "$GITHUB_ENV"
+          else
+            echo 'build_options=' >> "$GITHUB_OUTPUT"
+          fi
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          fi
+      - name: Build
+        uses: ./.github/actions/1_build
+        with:
+          cache-path: src/external/downloads/*
+          cache-key: external-libraries
+          build-precision: ${{ matrix.precision }}
+          build-options: ${{ steps.envs.outputs.build_options }}
+          nightly: ${{ !inputs.release-build }}
+      - name: OpenAxis regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S tests/openaxis -B build-tests -G Ninja -DCMAKE_BUILD_TYPE=Release -DOPENAXIS_SOURCE_DIR="$PWD/build/_deps/openaxis-src"
+          cmake --build build-tests
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            xvfb-run -a ctest --test-dir build-tests --output-on-failure
+          else
+            ctest --test-dir build-tests --output-on-failure
+          fi
+      - name: Deploy upstream packages
+        uses: ./.github/actions/2_deploy
+        with:
+          use-brew-qt: ${{ matrix.os == 'macos-15' }}
+          mac-certificate: ${{ inputs.release-build && secrets.MACOS_CERTIFICATE || '' }}
+          mac-certificate-id: ${{ inputs.release-build && secrets.MACOS_CERT_ID || '' }}
+          mac-certificate-pssw: ${{ inputs.release-build && secrets.MACOS_CERTIFICATE_PSSW || '' }}
+          mac-notarization-user: ${{ inputs.release-build && secrets.MACOS_NOTARIZATION_USER || '' }}
+          mac-notarization-team: ${{ inputs.release-build && secrets.MACOS_NOTARIZATION_TEAM_ID || '' }}
+          mac-notarization-pssw: ${{ inputs.release-build && secrets.MACOS_NOTARIZATION_PSSW || '' }}
+          win-certificate: ${{ inputs.release-build && secrets.WIN_CERTIFICATE || '' }}
+          win-certificate-pssw: ${{ inputs.release-build && secrets.WIN_CERTIFICATE_PSSW || '' }}
+      - name: Source provenance and portable archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > install/BUILD_COMMIT.txt
+          cp docs/OpenAxis.md docs/OpenAxis.rotatrix.yaml install/
+          mkdir -p portable
+          name="MeshLab-OpenAxis-${RUNNER_OS}-${{ steps.envs.outputs.artifact_suffix }}-${GITHUB_SHA}"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            7z a "portable/$name.zip" ./install/*
+          else
+            tar -czf "portable/$name.tar.gz" -C install .
+          fi
+      - name: Upload MeshLab Portable
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeshLab-${{ runner.os }}-portable-${{ steps.envs.outputs.artifact_suffix }}-${{ github.sha }}
+          path: portable/*
+          retention-days: 14
+          if-no-files-found: error
+      - name: Upload MeshLab Packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeshLab-${{ runner.os }}-packages-${{ steps.envs.outputs.artifact_suffix }}-${{ github.sha }}
+          path: packages/MeshLab*
+          retention-days: 14
+          if-no-files-found: error

@@ -1,256 +1,91 @@
-name: CreateRelease
+name: Rotatrix release
 
 on:
-  #[push, pull_request] #just for test release scripts
-  workflow_dispatch: #manual run
-    inputs:
-      version:
-        description: 'New MeshLab Version'
-        required: true
-        default: 'YYYY.MM'
+  push:
+    tags: ['*-rotatrix.*']
 
-env:
-  QT_VERSION: 5.15.2
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  update_ml_version:
-    name: Update ML_VERSION
-    runs-on: ubuntu-latest
+  validate:
+    runs-on: ubuntu-22.04
+    outputs:
+      prerelease: ${{ steps.tag.outputs.prerelease }}
     steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: true
-    - name: Update MeshLab version
-      run : |
-        echo ${{ github.event.inputs.version }} | tr -d '\n'> ML_VERSION
-    - name: commit ML_VERSION change
-      uses: stefanzweifel/git-auto-commit-action@v4
-      with:
-        commit_message: Set MeshLab version to ${{ github.event.inputs.version }}
-
-  meshlab_build:
-    needs: [update_ml_version]
-    name: Build MeshLab
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: ['ubuntu-22.04', 'ubuntu-22.04-arm', 'macos-13', 'macos-latest', 'windows-latest']
-        precision: [single_precision, double_precision]
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate immutable release tag and source
+        id: tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          MAC_CERT: ${{ secrets.MACOS_CERTIFICATE }}
+          MAC_ID: ${{ secrets.MACOS_CERT_ID }}
+          MAC_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PSSW }}
+          MAC_USER: ${{ secrets.MACOS_NOTARIZATION_USER }}
+          MAC_TEAM: ${{ secrets.MACOS_NOTARIZATION_TEAM_ID }}
+          MAC_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARIZATION_PSSW }}
+          WIN_CERT: ${{ secrets.WIN_CERTIFICATE }}
+          WIN_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PSSW }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^(.+)-rotatrix\.([1-9][0-9]*)(-beta\.([1-9][0-9]*))?$ ]] || { echo 'Invalid release tag'; exit 1; }
+          base="${BASH_REMATCH[1]}"
+          prerelease=false
+          [[ -z "${BASH_REMATCH[3]}" ]] || prerelease=true
+          git rev-parse --verify "refs/tags/$base^{commit}"
+          git merge-base --is-ancestor "refs/tags/$base" HEAD
+          if [[ "$prerelease" == false ]]; then
+            git merge-base --is-ancestor HEAD "refs/remotes/origin/rotatrix/$base"
+            for variable in MAC_CERT MAC_ID MAC_PASSWORD MAC_USER MAC_TEAM MAC_NOTARY_PASSWORD WIN_CERT WIN_PASSWORD; do
+              [[ -n "${!variable}" ]] || { echo "Required signing setting missing: $variable"; exit 1; }
+            done
+          fi
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo 'Release already exists; never replace shipped assets.'; exit 1
+          fi
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+  build:
+    needs: validate
+    uses: ./.github/workflows/BuildMeshLab.yml
+    with:
+      release-build: true
+    secrets: inherit
+  release:
+    needs: [validate, build]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
-        ref: main
-    - name: Setup Environment
-      uses: ./.github/actions/0_setup
-      with:
-        qt-version: ${{env.QT_VERSION}}
-        use-jurpel-qt-action: ${{matrix.os != 'macos-latest' && matrix.os != 'ubuntu-22.04-arm'}}
-    - name: Setup env variables
-      id: envs
-      shell: bash
-      run: |
-        ARCH=$(uname -m)
-        if [ "${{matrix.precision}}" == "double_precision" ]; then
-          echo "artifact_suffix=_double_$ARCH" >> $GITHUB_OUTPUT
-        else
-          echo "artifact_suffix=_$ARCH" >> $GITHUB_OUTPUT
-        fi
-        if [ "${{matrix.os}}" == "macos-latest" ]; then
-          echo "build_options=--use_brew_qt" >> $GITHUB_OUTPUT
-        else
-          echo "build_options=" >> $GITHUB_OUTPUT
-        fi
-    - name: Build
-      uses: ./.github/actions/1_build
-      with:
-        cache-path: src/external/downloads/*
-        cache-key: external-libraries
-        build-precision: ${{matrix.precision}}
-        build-options: ${{steps.envs.outputs.build_options}}
-    - name: Deploy
-      uses: ./.github/actions/2_deploy
-      with:
-        use-brew-qt: ${{matrix.os == 'macos-latest'}}
-        mac-certificate: ${{ secrets.MACOS_CERTIFICATE }}
-        mac-certificate-id: ${{ secrets.MACOS_CERT_ID }}
-        mac-certificate-pssw: ${{ secrets.MACOS_CERTIFICATE_PSSW }}
-        mac-notarization-user: ${{ secrets.MACOS_NOTARIZATION_USER }}
-        mac-notarization-team: ${{ secrets.MACOS_NOTARIZATION_TEAM_ID }}
-        mac-notarization-pssw: ${{ secrets.MACOS_NOTARIZATION_PSSW }}
-        win-certificate: ${{ secrets.WIN_CERTIFICATE }}
-        win-certificate-pssw: ${{ secrets.WIN_CERTIFICATE_PSSW }}
-    - name: Upload MeshLab Portable
-      uses: actions/upload-artifact@v4
-      with:
-        name: MeshLab_${{ runner.os }}_portable${{steps.envs.outputs.artifact_suffix}}
-        path: install/
-    - name: Upload MeshLab Packages
-      uses: actions/upload-artifact@v4
-      with:
-        name: MeshLab_${{ runner.os }}_packages${{steps.envs.outputs.artifact_suffix}}
-        path: packages/MeshLab*
-
-  #after building MeshLab for the three platforms, we create a release in github
-  create_release:
-    name: Create Release
-    needs: [meshlab_build]
-    runs-on: ubuntu-latest
-    steps:
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install libopengl0
-
-    #Download Linux Packages
-    - name: Download Linux x86_64 ZIP
-      uses: actions/download-artifact@v4
-      with:
-        name: MeshLab_Linux_portable_x86_64
-        path: meshlab_linux_portable_x86_64
-    - name: Download Linux x86_64 ZIP-d
-      uses: actions/download-artifact@v4
-      with:
-        name: MeshLab_Linux_portable_double_x86_64
-        path: meshlab_linux_portable_double_x86_64
-    - name: Download Linux x86_64 AppImage
-      uses: actions/download-artifact@v4
-      with:
-        name: MeshLab_Linux_packages_x86_64
-        path: meshlab_linux_appimage_x86_64
-    - name: Download Linux x86_64 AppImage-d
-      uses: actions/download-artifact@v4
-      with:
-        name: MeshLab_Linux_packages_double_x86_64
-        path: meshlab_linux_appimage_double_x86_64
-    - name: Download Linux aarch64 ZIP
-      uses: actions/download-artifact@v4
-      with:
-        name: MeshLab_Linux_portable_aarch64
-        path: meshlab_linux_portable_aarch64
-    - name: Download Linux aarch64 ZIP-d
-      uses: actions/download-artifact@v4
-      with:
-        name: MeshLab_Linux_portable_double_aarch64
-        path: meshlab_linux_portable_double_aarch64
-    - name: Download Linux aarch64 AppImage
-      uses: actions/download-artifact@v4
-      with:
-        name: MeshLab_Linux_packages_aarch64
-        path: meshlab_linux_appimage_aarch64
-    - name: Download Linux aarch64 AppImage-d
-      uses: actions/download-artifact@v4
-      with:
-        name: MeshLab_Linux_packages_double_aarch64
-        path: meshlab_linux_appimage_double_aarch64
-    - name: Change Permissions
-      run: |
-        chmod +x meshlab_linux_portable_x86_64/usr/bin/meshlab
-        chmod +x meshlab_linux_portable_x86_64/AppRun
-        chmod +x meshlab_linux_portable_double_x86_64/usr/bin/meshlab
-        chmod +x meshlab_linux_portable_double_x86_64/AppRun
-        chmod +x meshlab_linux_portable_aarch64/usr/bin/meshlab
-        chmod +x meshlab_linux_portable_aarch64/AppRun
-        chmod +x meshlab_linux_portable_double_aarch64/usr/bin/meshlab
-        chmod +x meshlab_linux_portable_double_aarch64/AppRun
-    - name: Setup env variables
-      id: envs
-      shell: bash
-      run: |
-        #get version of meshlab
-        IFS=' ' #space delimiter
-        STR_VERSION=$(meshlab_linux_portable_x86_64/usr/bin/meshlab --version)
-        read -a strarr <<< "$STR_VERSION"
-        ML_VERSION=${strarr[1]} #get the meshlab version from the string
-        echo "ml_version=$ML_VERSION" >> $GITHUB_OUTPUT
-        STR_VERSION=$(meshlab_linux_portable_double_x86_64/usr/bin/meshlab --version)
-        read -a strarrd <<< "$STR_VERSION"
-        ML_VERSION_D=${strarrd[1]} #get the meshlab version from the string
-        echo "ml_version_d=$ML_VERSION_D" >> $GITHUB_OUTPUT
-    - name: Create MeshLab Portable Linux Archive
-      run: |
-        cd meshlab_linux_portable_x86_64
-        tar -cvzf ../MeshLab${{steps.envs.outputs.ml_version}}-linux_x86_64.tar.gz *
-        cd ../meshlab_linux_portable_double_x86_64
-        tar -cvzf ../MeshLab${{steps.envs.outputs.ml_version_d}}-linux_x86_64.tar.gz *
-        cd ../meshlab_linux_portable_aarch64
-        tar -cvzf ../MeshLab${{steps.envs.outputs.ml_version}}-linux_aarch64.tar.gz *
-        cd ../meshlab_linux_portable_double_aarch64
-        tar -cvzf ../MeshLab${{steps.envs.outputs.ml_version_d}}-linux_aarch64.tar.gz *
-        cd ..
-
-    #Download MacOS Packages
-    - name: Download MacOS DMG x86_64
-      uses: actions/download-artifact@v4
-      with:
-        name: MeshLab_macOS_packages_x86_64
-        path: meshlab_macos_dmg_x86_64
-    - name: Download MacOS DMG-d x86_64
-      uses: actions/download-artifact@v4
-      with:
-        name: MeshLab_macOS_packages_double_x86_64
-        path: meshlab_macos_dmg_double_x86_64
-    - name: Download MacOS DMG arm64
-      uses: actions/download-artifact@v4
-      with:
-        name: MeshLab_macOS_packages_arm64
-        path: meshlab_macos_dmg_arm64
-    - name: Download MacOS DMG-d arm64
-      uses: actions/download-artifact@v4
-      with:
-        name: MeshLab_macOS_packages_double_arm64
-        path: meshlab_macos_dmg_double_arm64
-
-    #Download Windows Packages
-    - name: Download Windows ZIP
-      uses: actions/download-artifact@v4
-      with:
-        name: MeshLab_Windows_portable_x86_64
-        path: meshlab_windows_portable_x86_64
-    - name: Download Windows ZIP-d
-      uses: actions/download-artifact@v4
-      with:
-        name: MeshLab_Windows_portable_double_x86_64
-        path: meshlab_windows_portable_double_x86_64
-    - name: Download Windows Installer
-      uses: actions/download-artifact@v4
-      with:
-        name: MeshLab_Windows_packages_x86_64
-        path: meshlab_windows_installer_x86_64
-    - name: Download Windows Installer-d
-      uses: actions/download-artifact@v4
-      with:
-        name: MeshLab_Windows_packages_double_x86_64
-        path: meshlab_windows_installer_double_x86_64
-    - name: Create MeshLab Portable Windows Archive
-      run: |
-        cd meshlab_windows_portable_x86_64
-        zip -r ../MeshLab${{steps.envs.outputs.ml_version}}-windows_x86_64.zip *
-        cd ../meshlab_windows_portable_double_x86_64
-        zip -r ../MeshLab${{steps.envs.outputs.ml_version_d}}-windows_x86_64.zip *
-        cd ..
-
-    #Create release and upload
-    - name: Create Release
-      uses: "ncipollo/release-action@v1"
-      with:
-        token: "${{ secrets.GITHUB_TOKEN }}"
-        tag: "MeshLab-${{steps.envs.outputs.ml_version}}"
-        name: "MeshLab-${{steps.envs.outputs.ml_version}}"
-        artifacts: |
-          MeshLab${{steps.envs.outputs.ml_version}}-linux_x86_64.tar.gz
-          MeshLab${{steps.envs.outputs.ml_version_d}}-linux_x86_64.tar.gz
-          meshlab_linux_appimage_x86_64/MeshLab${{steps.envs.outputs.ml_version}}-linux_x86_64.AppImage
-          meshlab_linux_appimage_double_x86_64/MeshLab${{steps.envs.outputs.ml_version_d}}-linux_x86_64.AppImage
-          MeshLab${{steps.envs.outputs.ml_version}}-linux_aarch64.tar.gz
-          MeshLab${{steps.envs.outputs.ml_version_d}}-linux_aarch64.tar.gz
-          meshlab_linux_appimage_aarch64/MeshLab${{steps.envs.outputs.ml_version}}-linux_aarch64.AppImage
-          meshlab_linux_appimage_double_aarch64/MeshLab${{steps.envs.outputs.ml_version_d}}-linux_aarch64.AppImage
-          meshlab_macos_dmg_x86_64/MeshLab${{steps.envs.outputs.ml_version}}-macos_x86_64.dmg
-          meshlab_macos_dmg_double_x86_64/MeshLab${{steps.envs.outputs.ml_version_d}}-macos_x86_64.dmg
-          meshlab_macos_dmg_arm64/MeshLab${{steps.envs.outputs.ml_version}}-macos_arm64.dmg
-          meshlab_macos_dmg_double_arm64/MeshLab${{steps.envs.outputs.ml_version_d}}-macos_arm64.dmg
-          MeshLab${{steps.envs.outputs.ml_version}}-windows_x86_64.zip
-          MeshLab${{steps.envs.outputs.ml_version_d}}-windows_x86_64.zip
-          meshlab_windows_installer_x86_64/MeshLab${{steps.envs.outputs.ml_version}}-windows_x86_64.exe
-          meshlab_windows_installer_double_x86_64/MeshLab${{steps.envs.outputs.ml_version_d}}-windows_x86_64.exe
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: MeshLab-*-${{ github.sha }}
+          path: artifacts
+      - name: Publish tagged packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir release-assets
+          # Preserve upstream installers/AppImages/DMGs and portable bundles.
+          # Prefix the unique artifact directory to prevent package-name collisions.
+          while IFS= read -r -d '' file; do
+            directory=$(basename "$(dirname "$file")")
+            cp "$file" "release-assets/$directory-$(basename "$file")"
+          done < <(find artifacts -type f -print0)
+          args=()
+          if [[ "$PRERELEASE" == true ]]; then args+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" release-assets/* --verify-tag "${args[@]}" \
+            --title "MeshLab $RELEASE_TAG" --notes "Rotatrix/OpenAxis build from $GITHUB_SHA. Beta builds may be unsigned."
