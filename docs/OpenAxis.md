@@ -93,8 +93,8 @@ ctest --test-dir build-local/tests -C Release --output-on-failure
 
 See [the fork workflow spec](RotatrixForkWorkflow.md). This integration is still
 work in progress: `rotatrix/work/MeshLab-2025.07`. No maintained branch or final
-release tag has been created. The earlier `rotatrix/main` branch and its draft
-preview releases are legacy test snapshots; new development happens on the work branch.
+release tag has been created. The earlier remote `rotatrix/main` branch has been retired. Its existing draft
+preview releases remain legacy test snapshots; new development happens on the work branch.
 
 `BuildMeshLab.yml` reuses upstream's setup/build/deploy composite actions and
 platform scripts. Pushes to `rotatrix/**`, PRs to `rotatrix/*`, and manual runs
