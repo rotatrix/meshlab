@@ -79,6 +79,10 @@ runs:
             throw "Signature verification failed: $($file.Name)"
           }
         }
+    - name: Ad-hoc sign and verify macOS test bundle
+      if: runner.os == 'macOS' && inputs.mac-certificate == ''
+      shell: bash
+      run: bash scripts/macOS/internal/2b_adhoc_test_bundle.sh install/meshlab.app
     - name: Sign and Notarize
       if: runner.os == 'macOS' && inputs.mac-certificate != ''
       uses: cnr-isti-vclab/sign-and-notarize@v1
