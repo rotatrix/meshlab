@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: ['rotatrix/*']
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: Platforms to build (use macos for focused packaging retries)
+        type: choice
+        options: [all, macos]
+        default: all
   workflow_call:
     inputs:
       release-build:
@@ -29,7 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-15-intel, macos-15, windows-2022]
+        os: ${{ fromJSON(inputs.platforms == 'macos' && '["macos-15-intel","macos-15"]' || '["ubuntu-22.04","ubuntu-22.04-arm","macos-15-intel","macos-15","windows-2022"]') }}
         precision: [single_precision, double_precision]
     steps:
       - uses: actions/checkout@v4

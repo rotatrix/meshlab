@@ -145,7 +145,8 @@ Permanent test releases use `MeshLab-2025.07-rotatrix.1-beta.1` and are publishe
 as prereleases. Existing release assets are never overwritten. Do not move or
 delete release tags; increase the suffix instead. No release tag is created by CI.
 
-macOS work builds have no Developer ID signature and are not notarized. After
+macOS work builds have no Developer ID signature and are not notarized. Build-only
+static archives are removed from the test bundle's Frameworks directory. After
 Qt deployment, CI applies certificate-free ad-hoc signatures inside out and
 verifies the complete app before producing the portable archive and DMG. This
 ensures internal signature integrity, including on Apple Silicon; it does not
