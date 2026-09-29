@@ -22,7 +22,6 @@
 #include <QPainter>
 #include <QPointer>
 #include <QPushButton>
-#include <QShortcut>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <cmath>
@@ -119,9 +118,6 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         QObject::connect(view.md(), SIGNAL(meshDocumentModified()), &sceneObserver, SLOT(notify()));
         QObject::connect(view.md(), SIGNAL(documentUpdated()), &sceneObserver, SLOT(notify()));
         QObject::connect(view.md(), SIGNAL(currentMeshChanged(int)), &sceneObserver, SLOT(notify()));
-        auto *shortcut = new QShortcut(QKeySequence("Ctrl+Shift+O"), &view);
-        shortcut->setContext(Qt::WidgetWithChildrenShortcut);
-        QObject::connect(shortcut, &QShortcut::activated, &sceneObserver, [this] { toggleDiagnostics(); });
     }
     ~Impl() override {
         hub->remove(this);
@@ -503,5 +499,6 @@ OpenAxisController::~OpenAxisController() = default;
 void OpenAxisController::refresh() { impl->refresh(); }
 void OpenAxisController::paint(QPainter &p) { impl->paint(p); }
 void OpenAxisController::sampleDepth() { impl->sampleDepth(); }
+void OpenAxisController::toggleDiagnostics() { impl->toggleDiagnostics(); }
 
 #include "openaxis_controller.moc"

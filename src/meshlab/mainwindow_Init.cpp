@@ -637,6 +637,14 @@ void MainWindow::createMenus()
 	helpMenu->addAction(aboutPluginsAct);
 	helpMenu->addAction(onlineHelpAct);
 	helpMenu->addAction(onscreenHelpAct);
+#ifdef MESHLAB_OPENAXIS
+	auto *openAxisDiagnosticsAct = helpMenu->addAction(tr("OpenAxis Diagnostics"));
+	openAxisDiagnosticsAct->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O));
+	openAxisDiagnosticsAct->setShortcutContext(Qt::WindowShortcut);
+	connect(openAxisDiagnosticsAct, &QAction::triggered, this, [this] {
+		if (GLA()) GLA()->toggleOpenAxisDiagnostics();
+	});
+#endif
 	helpMenu->addAction(submitBugAct);
 	helpMenu->addAction(checkUpdatesAct);
 

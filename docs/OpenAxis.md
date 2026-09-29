@@ -9,7 +9,8 @@ adapter supplies camera and scene data on the GUI thread.
 Start Rotatrix 1.6 or newer and select a profile matching `app.meshlab`.
 The client reports its PID, the `workspace.modeling` tag and navigation capability.
 The SDK connects to the local service on port 6607. Open a mesh and activate its
-viewport. Use **Ctrl+Shift+O** with viewport focus to open the modeless
+viewport. Use **Help → OpenAxis Diagnostics**, **⌘⇧O** on macOS, or
+**Ctrl+Shift+O** on Windows/Linux to open the modeless
 **OpenAxis Diagnostics** window. It shows connection/focus/gesture status, the
 connection error and automatic retry countdown. **Reconnect** restarts the connection
 immediately; **Copy diagnostics** copies status, SDK evidence and the last 64 KiB

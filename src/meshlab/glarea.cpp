@@ -133,6 +133,13 @@ GLArea::GLArea(QWidget *parent, MultiViewer_Container *mvcont, RichParameterList
 #endif
 }
 
+void GLArea::toggleOpenAxisDiagnostics()
+{
+#ifdef MESHLAB_OPENAXIS
+    if (openaxisController) openaxisController->toggleDiagnostics();
+#endif
+}
+
 GLArea::~GLArea()
 {
 #ifdef MESHLAB_OPENAXIS

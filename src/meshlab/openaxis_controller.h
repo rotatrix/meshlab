@@ -11,6 +11,7 @@ public:
     void refresh();
     void paint(QPainter &);
     void sampleDepth();
+    void toggleDiagnostics();
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;

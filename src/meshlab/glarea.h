@@ -173,6 +173,7 @@ public:
     //}
 
     void updateFps(float deltaTime);
+    void toggleOpenAxisDiagnostics();
 
     bool isCurrent() { if (mvc() == NULL) return false;return mvc()->currentId == this->id;}
 
