@@ -1,10 +1,4 @@
-# MeshLab / Rotatrix OpenAxis preview
-
-Work branch `rotatrix/work/MeshLab-2025.07` (based directly on upstream tag `MeshLab-2025.07`) integrates the OpenAxis C++ SDK release `cpp/v1.0.0-rc.1`
-(commit `acc4da095cde6747556245b4b6c110c16b968b6b`). The design follows
-`rotatrix/PrusaSlicer`'s `backport-2.9.6` integration: the SDK owns WebSocket
-transport, connection retries, gesture coordination and reconciliation; a host
-adapter supplies camera and scene data on the GUI thread.
+# Rotatrix navigation in MeshLab
 
 Start Rotatrix 1.6 or newer and select a profile matching `app.meshlab`.
 The client reports its PID, the `workspace.modeling` tag and navigation capability.
@@ -27,7 +21,7 @@ picking, bounds, selection, undo or saved content. No pick rays or camera axes a
 Text is rasterized before compositing to avoid the blank OpenGL text overlay.
 
 The renderer follows the [OpenAxis rendering contract](https://openaxis.rotatrix.com/reference/diagnostic-rendering/)
-and the PrusaSlicer OpenAxis overlay example. The separate pivot follows the
+for viewport diagnostics. The separate pivot follows the
 [pivot appearance guidance](https://openaxis.rotatrix.com/experience/pivots-diagnostics/):
 a four-logical-pixel lime disc with a black rim, with opaque visible fragments
 and 23% opacity behind geometry. It never writes scene depth.
@@ -35,7 +29,7 @@ and 23% opacity behind geometry. It never writes scene depth.
 Perspective and orthographic poses map to the native trackball, including its
 scale and nonzero center. Native mouse navigation remains available. Only the
 current, visible viewport in the active window accepts input; modal dialogs,
-popups, raster mode, mesh editors, snapshots and busy documents suspend navigation.
+popups, raster mode, snapshots and busy documents suspend navigation.
 Scene changes and viewport changes invalidate gestures. One shared connection
 and navigation session serve all document windows and split panes in a MeshLab
 process. The active main window's current document and pane select the target;
@@ -95,109 +89,13 @@ $env:PATH = "C:/path/to/Qt/5.15.2/msvc2019_64/bin;" + $env:PATH
 ctest --test-dir build-local/tests -C Release --output-on-failure
 ```
 
-## CI and releases
+## Packages
 
-### Upstream workflow baseline and compatibility changes
+Windows packages are portable ZIPs: extract into a writable folder and run
+`meshlab.exe`. No installer or administrator rights are needed. Windows packages
+are unsigned. Linux downloads provide tar archives and AppImages. macOS downloads
+contain `meshlab.app`; extract the archive and move the app to Applications.
 
-The source, composite actions and platform scripts start at official tag
-`MeshLab-2025.07` (commit `dc48b91ae562756a6988048c5d5c7f1d2b687256`).
-The upstream setup/build/deploy sequence, plugins and
-Windows portable and Linux portable/AppImage packaging are retained. The Windows
-installer script remains available locally but CI uses `--portable-only`. macOS uses the
-app-only archive described below. We do not import upstream main's workflow wholesale.
-
-| Area | Release-tag baseline | Current adaptation and reason |
-| --- | --- | --- |
-| macOS Intel | `macos-13` | `macos-15-intel`, replacing the old hosted image; Xcode 16.4 selected explicitly. |
-| macOS ARM64 | Moving `macos-latest` | Explicit `macos-15`, with Xcode 16.4; preserves the upstream Homebrew Qt path. |
-| Linux | Ubuntu 22.04 x64 and ARM64 | Same runners; system Qt on both, following upstream's later Linux setup correction. |
-| Windows | Moving `windows-latest` | Explicit `windows-2022`, using MSVC and Qt 5.15.2. |
-| U3D | 1.5.1 | Upstream commit `0c81769d8bc30bf26be7aa98d741f5248f0a7a01` backported as `1905ce181`: U3D 1.5.2 fixes removed `fp.h` and zlib header compatibility with current macOS SDKs. |
-| Build tools | Runner-provided CMake and Qt installer action v3 | CMake 3.31.6 satisfies the SDK's CMake 3.24 minimum without adopting CMake 4; Qt installer action v4 retains Qt 5.15.2 where upstream uses that installer. |
-| OpenAxis | No SDK | Adds its pinned dependency, OpenSSL setup and regression tests; leaves upstream application build/package scripts in control. |
-
-Runner image labels do not freeze image contents, and Homebrew packages remain
-rolling dependencies. Record new compatibility changes here instead of silently
-changing the release baseline. The U3D backport passed compilation and all five
-tests on both macOS architectures and precisions in run `36206801340`; that run
-then exposed a Bash empty-array error in the downstream deployment wrapper.
-The wrapper now uses nonempty positional arguments compatible with macOS Bash.
-Packaging validation remains pending the next CI run.
-
-### Branches, artifacts and releases
-
-See [the fork workflow spec](RotatrixForkWorkflow.md). This integration is still
-work in progress: `rotatrix/work/MeshLab-2025.07`. No maintained branch or final
-release tag has been created. The earlier remote `rotatrix/main` branch has been retired. Its existing draft
-preview releases remain legacy test snapshots; new development happens on the work branch.
-
-`BuildMeshLab.yml` reuses upstream's setup/build/deploy composite actions and
-platform scripts. Pushes to `rotatrix/**`, PRs to `rotatrix/*`, and manual runs
-build Linux x64/ARM64, macOS Intel/ARM64, and Windows x64 in single precision.
-The user approved single-precision-only distribution on 2026-10-16 as a MeshLab
-exception to the workspace policy of preserving upstream precision variants.
-Double precision remains available through the upstream CMake option for local
-builds. One reusable build workflow serves previews and release builds.
-Trusted branch builds embed the upstream `ML_VERSION`, run the OpenAxis regressions,
-then uploads one Windows portable ZIP, Linux portable archives and AppImages, plus macOS
-app-only archives named with architecture and a 12-character source SHA, retained for
-14 days. Work-branch pushes create no release or tag. A missing desktop GL context explicitly skips the GL-only tests.
-
-Downloads use short names, for example `MeshLab-windows-x64-0123456789ab.zip`,
-`MeshLab-linux-arm64-0123456789ab.AppImage` and
-`macos-app-arm64-0123456789ab.tar.gz`. Uploads are direct files with no outer ZIP.
-The full commit is retained in `BUILD_COMMIT.txt` (inside Contents/Resources on
-macOS) and GitHub run metadata. Release publishing preserves these unique filenames
-instead of prefixing artifact directory names. Extract the Windows ZIP into a
-user-writable folder and run `meshlab.exe`; no installer or admin rights are required.
-
-The default and contribution target is `rotatrix/work/MeshLab-2025.07`.
-Neither history cleanup nor a separate maintained branch is needed to ship.
-Immutable release tags preserve the exact distributed commit across later rewrites.
-
-`CreateRelease.yml` verifies and promotes existing artifacts without compiling.
-It requires the exact tagged SHA, a trusted successful full-platform run, build
-records, artifact digests and original branch attestations. Tag pushes prepare
-verification evidence; an explicit dispatch can create a draft and request signing
-only after the signer transition is enabled. See [release promotion](RotatrixRelease.md)
-for the gate, acceptance requirements and retry behavior. No workflow creates tags.
-
-### macOS app archives and release signing
-
-Every macOS build produces `macos-app-<architecture>-<short-sha>.tar.gz`
-containing only upstream-named `meshlab.app`. Both macOS architectures remain
-in the single-precision matrix. The upstream deployment step bundles runtime
-libraries; `scripts/macOS/3_pack_app.sh` completes missing transitive Homebrew
-`@rpath` dylibs (for example Brotli/SharpYUV with Qt 5.15.19), checks that runtime
-dependencies resolve inside the app or to system libraries, adds source and
-dependency license notices inside Resources, and signs the final
-contents ad hoc, archives them, extracts the archive and verifies its signature and
-`--version` startup. Framework symlinks and executable permissions are retained.
-No DMG or outer ZIP is uploaded. The pinned upload-artifact v7 action uses
-`archive: false`.
-
-Local example after upstream build/install/deploy (use the Qt version used to build):
-
-```bash
-QT_ROOT=/opt/homebrew/opt/qt@5 bash scripts/macOS/3_pack_app.sh \
-  install/meshlab.app build artifacts "arm64-$(git rev-parse --short=12 HEAD)"
-```
-
-Ordinary CI uses ad-hoc Mac signatures. Trusted branch builds attest all packages
-at build time. After verification, the promotion workflow dispatches the central
-signer with the original run and artifact IDs plus the immutable release tag.
-Source workflows use no Apple secrets. The `signing-dispatch` environment provides
-`SIGNER_DISPATCH_TOKEN`; publication is disabled until the merged central signer
-contract is validated. Drafts retain original inputs and provenance as well as
-Windows/Linux packages. The central signer adds verified signed outputs; publishing
-the complete draft remains an explicit release operation. Stable Windows releases
-require a build signed with `WIN_CERTIFICATE` and `WIN_CERTIFICATE_PSSW`; credentials
-are never passed to PR builds. Promotion never modifies the Windows binaries.
-
-Local archive validation does not establish Intel compatibility or replace testing
-downloaded CI artifacts and physical-device acceptance. No signing relay dispatch,
-tag or release is needed for local validation.
-
-Before tagging, test rotation, pan, zoom, native-mouse continuation, both
-projections, reconnect, application/modal focus, multiple documents/viewports,
-mesh and point-cloud changes, and closing during a gesture with a physical device.
+Rotatrix packages use single precision and include the full plugin set.
+The complete source revision is recorded in `BUILD_COMMIT.txt` (under
+`Contents/Resources` on macOS).

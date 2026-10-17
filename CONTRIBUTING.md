@@ -1,11 +1,8 @@
 # Contributing to the Rotatrix MeshLab fork
 
-The OpenAxis integration currently lives on `rotatrix/work/MeshLab-2025.07` and
-is not yet a maintained release. That development history may be rewritten.
+Branch from `rotatrix/work/MeshLab-2025.07` and target pull requests there.
+Report Rotatrix-specific issues in this fork, including your package/source
+revision, operating system and steps to reproduce the issue.
 
-Once available, branch from the relevant `rotatrix/<upstream-tag>` maintained
-branch and open your pull request directly against it. Your own branch is your
-work branch. Maintained history and shipped release tags are not rewritten.
-
-See [the fork workflow](docs/RotatrixForkWorkflow.md) and
-[the integration/build notes](docs/OpenAxis.md) for testing and release conventions.
+See [OpenAxis usage and building](docs/OpenAxis.md). Run the relevant tests and
+include validation results with changes.
