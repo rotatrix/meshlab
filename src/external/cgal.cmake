@@ -57,6 +57,15 @@ elseif(MESHLAB_ALLOW_DOWNLOAD_SOURCE_CGAL)
 
 	if (CGAL_DOWNLOAD_SUCCESS)
 		message(STATUS "- CGAL - using downloaded source")
+		# Backport removal of invalid iterator conversions, diagnosed by GCC 15.
+		# https://github.com/CGAL/cgal/commit/0de060acd68bcc6a19a4f4b93db562bf7ce944c5
+		set(CGAL_ITERATOR "${CGAL_DIR}/include/CGAL/boost/graph/iterator.h")
+		file(READ "${CGAL_ITERATOR}" CGAL_ITERATOR_SOURCE)
+		set(CGAL_INVALID_CONVERSION "  explicit operator bool() const\n  {\n    return (! (this->base() == nullptr));\n  }\n")
+		string(REPLACE "${CGAL_INVALID_CONVERSION}" "" CGAL_ITERATOR_PATCHED "${CGAL_ITERATOR_SOURCE}")
+		if(NOT CGAL_ITERATOR_PATCHED STREQUAL CGAL_ITERATOR_SOURCE)
+			file(WRITE "${CGAL_ITERATOR}" "${CGAL_ITERATOR_PATCHED}")
+		endif()
 		add_library(external-cgal INTERFACE)
 		target_include_directories(external-cgal INTERFACE "${CGAL_DIR}/include/")
 
