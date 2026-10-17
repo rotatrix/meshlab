@@ -185,11 +185,12 @@ def publish(directory):
         require(record['name'] in expected(plan['commit']) and
                 digest(directory / record['name']) == record['sha256'], 'Staged artifact changed')
     # A retry must fail rather than replace or silently add to a published release.
-    existing = subprocess.run(['gh', 'api', f'repos/{REPO}/releases/tags/{quote(plan["tag"], safe="")}'],
-                              capture_output=True, text=True)
-    require(existing.returncode != 0 and 'HTTP 404' in existing.stderr,
-            'Release exists or cannot be inspected; verify existing assets before retrying')
-    files = [str(p) for p in directory.iterdir() if p.is_file() and not p.name.startswith('macos-app-')]
+    existing = json.loads(subprocess.check_output(
+        ['gh', 'api', '--paginate', '--slurp', f'repos/{REPO}/releases?per_page=100'], text=True))
+    require(not any(r['tag_name'] == plan['tag'] for page in existing for r in page),
+            'Release or draft exists; verify existing assets before retrying')
+    files = [str(directory / r['name']) for r in plan['artifacts']
+             if r['name'].startswith(('MeshLab-windows-', 'MeshLab-linux-'))]
     command = ['gh', 'release', 'create', plan['tag'], *files, '--repo', REPO, '--verify-tag', '--draft',
                '--title', 'MeshLab ' + plan['tag'], '--notes',
                f'Exact source: {plan["commit"]}\nBuild: https://github.com/{REPO}/actions/runs/{plan["run_id"]}\n'
@@ -197,13 +198,10 @@ def publish(directory):
     if plan['prerelease']:
         command.append('--prerelease')
     subprocess.run(command, check=True)
-    # Signed inputs are retained with distinct names, never advertised as signed downloads.
+    # Verification records and ad-hoc signing inputs remain in Actions artifacts.
     for record in plan['artifacts']:
         if not record['name'].startswith('macos-app-'):
             continue
-        path = directory / record['name']
-        subprocess.run(['gh', 'release', 'upload', plan['tag'],
-                        str(path) + '#Signing input (ad-hoc)', '--repo', REPO], check=True)
         payload = dict(ref='main', inputs=dict(source_repository=REPO, source_run_id=str(plan['run_id']),
                        artifact_id=str(record['id']), release_tag=plan['tag'], publish=True))
         require(tag_commit(plan['tag']) == plan['commit'], 'Tag moved before signing dispatch')

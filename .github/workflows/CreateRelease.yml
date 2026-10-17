@@ -103,7 +103,6 @@ jobs:
       github.event_name == 'workflow_dispatch' && inputs.publish &&
       inputs.source-and-package-acceptance && vars.ROTATRIX_PROMOTION_ENABLED == 'true'
     runs-on: ubuntu-24.04
-    environment: signing-dispatch
     permissions:
       contents: write
       actions: read
