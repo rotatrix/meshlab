@@ -33,8 +33,22 @@ fi
 
 ARCH=$(uname -m)
 
+# Qt loads SSL dynamically, so linuxdeploy cannot discover it from DT_NEEDED.
+# Use the SSL library beside the crypto dependency selected for this build.
+CRYPTO_LIBRARY=$(ldd "$INSTALL_PATH/usr/bin/meshlab" | awk '$1 ~ /^libcrypto\.so/ && $2 == "=>" {print $3; exit}')
+if [ -z "$CRYPTO_LIBRARY" ]; then
+  CRYPTO_LIBRARY=$(readlink -f "$(pkg-config --variable=libdir libcrypto)/libcrypto.so")
+fi
+SSL_LIBRARY="$(dirname "$CRYPTO_LIBRARY")/$(basename "$CRYPTO_LIBRARY" | sed 's/^libcrypto/libssl/')"
+if [ ! -f "$CRYPTO_LIBRARY" ] || [ ! -f "$SSL_LIBRARY" ]; then
+  echo "Cannot find matching OpenSSL libraries: $CRYPTO_LIBRARY and $SSL_LIBRARY" >&2
+  exit 1
+fi
+
 # Make sure that deploy succeeds before we start deleting files
-if $RESOURCES_PATH/linux/$ARCH/linuxdeploy --appdir=$INSTALL_PATH --plugin qt; then
+if "$RESOURCES_PATH/linux/$ARCH/linuxdeploy" --appdir="$INSTALL_PATH" --plugin qt \
+    --library="$CRYPTO_LIBRARY" --library="$SSL_LIBRARY"; then
+  python3 "$SCRIPTS_PATH/internal/check_tls.py" "$INSTALL_PATH" || exit 1
   # after deploy, all required libraries are placed into usr/lib, therefore we can remove the ones in
   # usr/lib/meshlab (except for the ones that are loaded at runtime)
   cd $INSTALL_PATH/usr/lib/meshlab
