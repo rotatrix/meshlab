@@ -2,14 +2,6 @@ name: 'Deploy'
 description: 'Deploy'
 
 inputs:
-  win-certificate:
-    description: 'Windows Certificate'
-    required: false
-    default: ''
-  win-certificate-pssw:
-    description: 'Windows Certificate Password'
-    required: false
-    default: ''
   use-brew-qt:
     description: 'Qt Option'
     required: false
@@ -18,7 +10,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Set Notarization settings
+    - name: Set Qt option
       id: envs
       shell: bash
       run: |
@@ -29,33 +21,15 @@ runs:
         fi
     - name: Deploy
       env:
-        WIN_CERTIFICATE: ${{ inputs.win-certificate }}
-        WIN_PASSWORD: ${{ inputs.win-certificate-pssw }}
         QT_OPTION: ${{ steps.envs.outputs.qt-option }}
       shell: bash
       run: |
         set -euo pipefail
-        # Record provenance before deployment seals an AppImage or signs binaries.
+        # Record the source commit before deployment seals the AppImage.
         git rev-parse HEAD > install/BUILD_COMMIT.txt
         # macOS ships Bash 3.2: an empty array with nounset is an error.
         # Keep the command nonempty and preserve each argument's quoting.
         set -- bash "scripts/${RUNNER_OS}/2_deploy.sh"
         if [[ "$RUNNER_OS" == Windows ]]; then set -- "$@" --portable-only; fi
         if [[ -n "$QT_OPTION" ]]; then set -- "$@" "$QT_OPTION"; fi
-        if [[ "$RUNNER_OS" == Windows && -n "$WIN_CERTIFICATE" ]]; then
-          certificate=$(mktemp "$RUNNER_TEMP/meshlab-signing-XXXXXX.pfx")
-          trap 'rm -f "$certificate"' EXIT
-          printf '%s' "$WIN_CERTIFICATE" | base64 --decode > "$certificate"
-          set -- "$@" "--cert_file=$certificate" "--cert_pssw=$WIN_PASSWORD"
-        fi
         "$@"
-    - name: Verify Windows signatures
-      if: runner.os == 'Windows' && inputs.win-certificate != ''
-      shell: pwsh
-      run: |
-        $files = Get-ChildItem install -Recurse -File | Where-Object { $_.Extension -in '.exe','.dll' }
-        foreach ($file in $files) {
-          if ((Get-AuthenticodeSignature -LiteralPath $file.FullName).Status -ne 'Valid') {
-            throw "Signature verification failed: $($file.Name)"
-          }
-        }

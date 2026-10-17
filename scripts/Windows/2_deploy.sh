@@ -31,7 +31,7 @@ case $i in
         shift # past argument=value
         ;;
     -cf=*|--cert_file=*)
-        CERT_FILE_OPTION=--cert_file="${i#*=}"
+        CERT_FILE_OPTION=cf="${i#*=}"
         shift # past argument=value
         ;;
     -cp=*|--cert_pssw=*)
@@ -52,7 +52,7 @@ bash $SCRIPTS_PATH/internal/2a_portable.sh -i=$INSTALL_PATH $QT_DIR_OPTION
 echo "======= Portable Version Created ======="
 
 if [ "$SIGN" = true ] ; then
-    bash $SCRIPTS_PATH/internal/2b_sign_dlls.sh -i=$INSTALL_PATH "$CERT_FILE_OPTION" "-cp=$CERT_PSSW" || exit $?
+    bash $SCRIPTS_PATH/internal/2b_sign_dlls.sh -i=$INSTALL_PATH  $CERT_FILE_OPTION -cp=$CERT_PSSW
 
     echo "======= Portable Version Signed ======="
 fi
@@ -66,7 +66,7 @@ bash $SCRIPTS_PATH/internal/2c_installer.sh -i=$INSTALL_PATH -p=$PACKAGES_PATH
 echo "======= Installer Created ======="
 
 if [ "$SIGN" = true ] ; then
-    bash $SCRIPTS_PATH/internal/2b_sign_dlls.sh -i=$PACKAGES_PATH "$CERT_FILE_OPTION" "-cp=$CERT_PSSW" || exit $?
+    bash $SCRIPTS_PATH/internal/2b_sign_dlls.sh -i=$PACKAGES_PATH  $CERT_FILE_OPTION -cp=$CERT_PSSW
 
     echo "======= Installer Signed ======="
 fi

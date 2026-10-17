@@ -1,18 +1,14 @@
-import copy
 import hashlib
 import json
-import os
 from pathlib import Path
 import sys
 import tempfile
-import tarfile
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts/rotatrix'))
 import promote
 import license_notices
-import build_record
 
 SHA = 'a' * 40
 
