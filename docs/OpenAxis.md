@@ -101,7 +101,7 @@ ctest --test-dir build-local/tests -C Release --output-on-failure
 
 The source, composite actions and platform scripts start at official tag
 `MeshLab-2025.07` (commit `dc48b91ae562756a6988048c5d5c7f1d2b687256`).
-The upstream setup/build/deploy sequence, plugins, two precision variants and
+The upstream setup/build/deploy sequence, plugins and
 Windows/Linux portable/installer/AppImage packaging are retained. macOS uses the
 app-only archive described below. We do not import upstream main's workflow wholesale.
 
@@ -132,8 +132,12 @@ preview releases remain legacy test snapshots; new development happens on the wo
 
 `BuildMeshLab.yml` reuses upstream's setup/build/deploy composite actions and
 platform scripts. Pushes to `rotatrix/**`, PRs to `rotatrix/*`, and manual runs
-build Linux x64/ARM64, macOS Intel/ARM64, and Windows x64, in both upstream
-single- and double-precision configurations. It runs the OpenAxis regressions,
+build Linux x64/ARM64, macOS Intel/ARM64, and Windows x64 in single precision.
+The user approved single-precision-only distribution on 2026-10-16 as a MeshLab
+exception to the workspace policy of preserving upstream precision variants.
+Double precision remains available through the upstream CMake option for local
+builds. One reusable build workflow serves previews and release builds.
+It runs the OpenAxis regressions,
 then uploads Windows/Linux portable bundles and installers/AppImages, plus macOS
 app-only archives named with architecture, precision and source SHA, retained for
 14 days. Work-branch pushes create no release or tag. A missing desktop GL context explicitly skips the GL-only tests.
