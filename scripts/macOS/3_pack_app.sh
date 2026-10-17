@@ -15,7 +15,7 @@ python3 "$SOURCE/scripts/macOS/internal/complete_dylibs.py" "$APP"
 
 # Keep notices in Resources, including transitive bundled-source notices.
 python3 - <<'PY'
-import os, plistlib, shutil, subprocess
+import os, plistlib, shutil, subprocess, sys
 from pathlib import Path
 app, source, build, qt = (Path(os.environ[k]) for k in ('APP', 'SOURCE', 'BUILD', 'QT_ROOT'))
 with (app / 'Contents/Info.plist').open('rb') as stream:
@@ -33,17 +33,12 @@ deps = subprocess.check_output(['brew', 'deps', '--installed', '--union', *insta
 for name in sorted(set(installed + deps)):
     if (brew / name).exists():
         roots.append((name, (brew / name).resolve()))
-for label, root in roots:
-    for folder, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in ('.git', 'node_modules', 'ci-logs', 'artifacts', 'install') and not d.startswith('build')]
-        for name in files:
-            if name.lower().startswith(('license', 'licence', 'copying', 'copyright', 'notice')):
-                path = Path(folder) / name
-                if not path.is_file():
-                    continue
-                target = dest / label / path.relative_to(root)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(path, target)
+sys.path.insert(0, str(source / 'scripts/rotatrix'))
+from license_notices import collect
+# This generated notice directory belongs to this packaging stage only.
+if dest.exists():
+    shutil.rmtree(dest)
+collect(dest, roots)
 for name in ('OpenAxis.md', 'OpenAxis.rotatrix.yaml'):
     shutil.copyfile(source / 'docs' / name, app / 'Contents/Resources' / name)
 (app / 'Contents/Resources/BUILD_COMMIT.txt').write_text(

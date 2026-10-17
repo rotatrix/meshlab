@@ -3,88 +3,96 @@ name: Rotatrix release
 on:
   push:
     tags: ['*-rotatrix.*']
+  workflow_dispatch:
+    inputs:
+      release-tag:
+        description: Existing immutable MeshLab release tag
+        type: string
+        required: true
+      build-run-id:
+        description: Successful full-platform trusted build at the exact tagged SHA
+        type: string
+        required: true
+      publish:
+        description: Create draft and request signing (requires deployed signer transition)
+        type: boolean
+        default: false
+      source-and-package-acceptance:
+        description: Package testing and corresponding-source/license completeness reviewed for this SHA
+        type: boolean
+        default: false
 
 permissions:
   contents: read
-  id-token: write
-  attestations: write
+  actions: read
+  attestations: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.release-tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  validate:
-    runs-on: ubuntu-22.04
+  verify:
+    if: >-
+      github.repository == 'rotatrix/meshlab' &&
+      (github.event_name == 'push' ||
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    runs-on: ubuntu-24.04
     outputs:
-      prerelease: ${{ steps.tag.outputs.prerelease }}
+      artifact-id: ${{ steps.prepared.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-      - name: Validate immutable release tag and source
-        id: tag
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test promotion checks
+        run: python3 -m unittest discover -s tests/rotatrix -v
+      - name: Verify original build and stage unchanged artifacts
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          WIN_CERT: ${{ secrets.WIN_CERTIFICATE }}
-          WIN_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PSSW }}
+          RELEASE_TAG: ${{ inputs.release-tag || github.ref_name }}
+          BUILD_RUN_ID: ${{ inputs.build-run-id }}
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$RELEASE_TAG" =~ ^(.+)-rotatrix\.([1-9][0-9]*)(-beta\.([1-9][0-9]*))?$ ]] || { echo 'Invalid release tag'; exit 1; }
-          base="${BASH_REMATCH[1]}"
-          prerelease=false
-          [[ -z "${BASH_REMATCH[3]}" ]] || prerelease=true
-          git rev-parse --verify "refs/tags/$base^{commit}"
-          git merge-base --is-ancestor "refs/tags/$base" HEAD
-          if [[ "$prerelease" == false ]]; then
-            git merge-base --is-ancestor HEAD "refs/remotes/origin/rotatrix/$base"
-            for variable in WIN_CERT WIN_PASSWORD; do
-              [[ -n "${!variable}" ]] || { echo "Required signing setting missing: $variable"; exit 1; }
-            done
-          fi
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo 'Release already exists; never replace shipped assets.'; exit 1
-          fi
-          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
-  build:
-    needs: validate
-    uses: ./.github/workflows/BuildMeshLab.yml
-    with:
-      release-build: true
-    secrets: inherit
-  release:
-    needs: [validate, build]
-    runs-on: ubuntu-22.04
+          args=(prepare --tag "$RELEASE_TAG")
+          if [[ -n "$BUILD_RUN_ID" ]]; then args+=(--run-id "$BUILD_RUN_ID"); fi
+          python3 scripts/rotatrix/promote.py "${args[@]}"
+      - name: Retain verified promotion evidence
+        id: prepared
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: verified-promotion-${{ github.run_id }}
+          path: promotion/*
+          retention-days: 14
+          if-no-files-found: error
+          compression-level: 0
+
+  draft-and-sign:
+    needs: verify
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.publish &&
+      inputs.source-and-package-acceptance && vars.ROTATRIX_PROMOTION_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    environment: signing-dispatch
     permissions:
       contents: write
+      actions: read
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          pattern: MeshLab-*
-          path: artifacts
-          skip-decompress: true
-          merge-multiple: true
-      - name: Publish tagged packages
+          artifact-ids: ${{ needs.verify.outputs.artifact-id }}
+          path: promotion
+          digest-mismatch: error
+      - name: Create draft and dispatch verified original macOS artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
-          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir release-assets
-          # Preserve the short, already unique Windows/Linux download names.
-          # The completion relay sends macOS apps to the central signer.
-          while IFS= read -r -d '' file; do
-            target="release-assets/$(basename "$file")"
-            [[ ! -e "$target" ]] || { echo "Duplicate release asset: $target"; exit 1; }
-            cp "$file" "$target"
-          done < <(find artifacts -type f -print0)
-          args=()
-          if [[ "$PRERELEASE" == true ]]; then args+=(--prerelease); fi
-          gh release create "$RELEASE_TAG" release-assets/* --verify-tag "${args[@]}" \
-            --title "MeshLab $RELEASE_TAG" --notes "Rotatrix/OpenAxis build from $GITHUB_SHA. Beta builds may be unsigned."
+          SIGNER_DISPATCH_TOKEN: ${{ secrets.SIGNER_DISPATCH_TOKEN }}
+          ROTATRIX_PROMOTION_ENABLED: ${{ vars.ROTATRIX_PROMOTION_ENABLED }}
+          SOURCE_ACCEPTANCE: ${{ inputs.source-and-package-acceptance }}
+        run: python3 scripts/rotatrix/promote.py publish

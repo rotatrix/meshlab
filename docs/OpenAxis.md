@@ -138,7 +138,7 @@ The user approved single-precision-only distribution on 2026-10-16 as a MeshLab
 exception to the workspace policy of preserving upstream precision variants.
 Double precision remains available through the upstream CMake option for local
 builds. One reusable build workflow serves previews and release builds.
-It runs the OpenAxis regressions,
+Trusted branch builds embed the upstream `ML_VERSION`, run the OpenAxis regressions,
 then uploads one Windows portable ZIP, Linux portable archives and AppImages, plus macOS
 app-only archives named with architecture and a 12-character source SHA, retained for
 14 days. Work-branch pushes create no release or tag. A missing desktop GL context explicitly skips the GL-only tests.
@@ -151,18 +151,16 @@ macOS) and GitHub run metadata. Release publishing preserves these unique filena
 instead of prefixing artifact directory names. Extract the Windows ZIP into a
 user-writable folder and run `meshlab.exe`; no installer or admin rights are required.
 
-When ready, clean up the downstream patch stack and create maintained branch
-`rotatrix/MeshLab-2025.07`; set that branch as the GitHub default at that time.
-Contributions target that maintained branch. Its published history is append-only.
-The repository default is currently `rotatrix/work/MeshLab-2025.07` by explicit
-maintainer choice. It remains a disposable work branch, not a maintained release.
+The default and contribution target is `rotatrix/work/MeshLab-2025.07`.
+Neither history cleanup nor a separate maintained branch is needed to ship.
+Immutable release tags preserve the exact distributed commit across later rewrites.
 
-`CreateRelease.yml` runs only for explicit `*-rotatrix.*` tags, using the same
-upstream build/deploy path. Stable tags such as `MeshLab-2025.07-rotatrix.1` must
-point into the matching maintained branch and descend from the upstream tag.
-Permanent test releases use `MeshLab-2025.07-rotatrix.1-beta.1` and are published
-as prereleases. Existing release assets are never overwritten. Do not move or
-delete release tags; increase the suffix instead. No release tag is created by CI.
+`CreateRelease.yml` verifies and promotes existing artifacts without compiling.
+It requires the exact tagged SHA, a trusted successful full-platform run, build
+records, artifact digests and original branch attestations. Tag pushes prepare
+verification evidence; an explicit dispatch can create a draft and request signing
+only after the signer transition is enabled. See [release promotion](RotatrixRelease.md)
+for the gate, acceptance requirements and retry behavior. No workflow creates tags.
 
 ### macOS app archives and release signing
 
@@ -185,17 +183,16 @@ QT_ROOT=/opt/homebrew/opt/qt@5 bash scripts/macOS/3_pack_app.sh \
   install/meshlab.app build artifacts "arm64-$(git rev-parse --short=12 HEAD)"
 ```
 
-Previews have ad-hoc signatures and are not notarized. Tag builds create GitHub
-build provenance for the same archive; after the entire **Rotatrix release** run
-succeeds, `RequestReleaseSigning.yml` requests central Developer ID signing and
-notarization from `rotatrix/release-signing`. Source workflows use no Apple secrets.
-The relay must be on the repository default branch and its `signing-dispatch`
-environment must provide `SIGNER_DISPATCH_TOKEN` with Actions write access to the
-signer. The signer publishes signed archives to the existing tag's release without
-replacing Windows/Linux assets. Source release publishing selects only the
-`MeshLab-*` Windows/Linux artifacts, so ad-hoc macOS archives are not published as
-release assets. Stable Windows releases still require `WIN_CERTIFICATE` and
-`WIN_CERTIFICATE_PSSW`.
+Ordinary CI uses ad-hoc Mac signatures. Trusted branch builds attest all packages
+at build time. After verification, the promotion workflow dispatches the central
+signer with the original run and artifact IDs plus the immutable release tag.
+Source workflows use no Apple secrets. The `signing-dispatch` environment provides
+`SIGNER_DISPATCH_TOKEN`; publication is disabled until the merged central signer
+contract is validated. Drafts retain original inputs and provenance as well as
+Windows/Linux packages. The central signer adds verified signed outputs; publishing
+the complete draft remains an explicit release operation. Stable Windows releases
+require a build signed with `WIN_CERTIFICATE` and `WIN_CERTIFICATE_PSSW`; credentials
+are never passed to PR builds. Promotion never modifies the Windows binaries.
 
 Local archive validation does not establish Intel compatibility or replace testing
 downloaded CI artifacts and physical-device acceptance. No signing relay dispatch,

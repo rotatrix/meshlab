@@ -4,7 +4,7 @@ on:
   push:
     branches: ['rotatrix/**']
   pull_request:
-    branches: ['rotatrix/*']
+    branches: ['rotatrix/**']
   workflow_dispatch:
     inputs:
       platforms:
@@ -12,11 +12,6 @@ on:
         type: choice
         options: [all, macos]
         default: all
-  workflow_call:
-    inputs:
-      release-build:
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -25,7 +20,8 @@ permissions:
 
 concurrency:
   group: meshlab-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  # Let healthy builds finish and save dependency caches before the next run.
+  cancel-in-progress: false
 
 env:
   QT_VERSION: 5.15.2
@@ -61,6 +57,8 @@ jobs:
           python -m pip install cmake==3.31.6 ninja
           if [[ "$RUNNER_OS" == Linux ]]; then sudo apt-get install -y libssl-dev xvfb; fi
           if [[ "$RUNNER_OS" == macOS ]]; then brew install openssl@3; fi
+      - name: Packaging and promotion regression tests
+        run: python -m unittest discover -s tests/rotatrix -v
       - name: Setup build options
         id: envs
         shell: bash
@@ -85,7 +83,7 @@ jobs:
           cache-key: external-libraries
           build-precision: ${{ matrix.precision }}
           build-options: ${{ steps.envs.outputs.build_options }}
-          nightly: ${{ !inputs.release-build }}
+          nightly: false
       - name: OpenAxis regression tests
         shell: bash
         run: |
@@ -101,8 +99,8 @@ jobs:
         uses: ./.github/actions/2_deploy
         with:
           use-brew-qt: ${{ matrix.os == 'macos-15' }}
-          win-certificate: ${{ inputs.release-build && secrets.WIN_CERTIFICATE || '' }}
-          win-certificate-pssw: ${{ inputs.release-build && secrets.WIN_CERTIFICATE_PSSW || '' }}
+          win-certificate: ${{ github.repository == 'rotatrix/meshlab' && github.event_name != 'pull_request' && startsWith(github.ref, 'refs/heads/rotatrix/') && secrets.WIN_CERTIFICATE || '' }}
+          win-certificate-pssw: ${{ github.repository == 'rotatrix/meshlab' && github.event_name != 'pull_request' && startsWith(github.ref, 'refs/heads/rotatrix/') && secrets.WIN_CERTIFICATE_PSSW || '' }}
       - name: Package and smoke-test macOS app
         if: runner.os == 'macOS'
         shell: bash
@@ -117,11 +115,6 @@ jobs:
           archive: false
           retention-days: 14
           if-no-files-found: error
-      - name: Attest release macOS app
-        if: runner.os == 'macOS' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
-        with:
-          subject-path: portable/macos-app-*.tar.gz
       - name: Source provenance and portable archive
         if: runner.os != 'macOS'
         shell: bash
@@ -150,6 +143,40 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           path: portable/*.AppImage
+          archive: false
+          retention-days: 14
+          if-no-files-found: error
+      - name: Preserve build sources
+        if: matrix.os == 'ubuntu-22.04'
+        shell: bash
+        run: python3 scripts/rotatrix/build_record.py sources
+      - name: Record package hashes and configuration
+        env:
+          WINDOWS_SIGNED: ${{ runner.os == 'Windows' && github.repository == 'rotatrix/meshlab' && github.event_name != 'pull_request' && startsWith(github.ref, 'refs/heads/rotatrix/') && secrets.WIN_CERTIFICATE != '' && secrets.WIN_CERTIFICATE_PSSW != '' }}
+        shell: bash
+        run: python scripts/rotatrix/build_record.py record --platform '${{ matrix.os }}'
+      - name: Attest trusted build outputs
+        if: >-
+          github.repository == 'rotatrix/meshlab' &&
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          startsWith(github.ref, 'refs/heads/rotatrix/')
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: |
+            portable/*
+            provenance/*
+      - name: Upload build record
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          path: provenance/build-*.json
+          archive: false
+          retention-days: 14
+          if-no-files-found: error
+      - name: Upload build sources
+        if: matrix.os == 'ubuntu-22.04'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          path: portable/MeshLab-sources-*.tar.gz
           archive: false
           retention-days: 14
           if-no-files-found: error

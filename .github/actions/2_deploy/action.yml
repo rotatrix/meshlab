@@ -35,6 +35,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        # Record provenance before deployment seals an AppImage or signs binaries.
+        git rev-parse HEAD > install/BUILD_COMMIT.txt
         # macOS ships Bash 3.2: an empty array with nounset is an error.
         # Keep the command nonempty and preserve each argument's quoting.
         set -- bash "scripts/${RUNNER_OS}/2_deploy.sh"
