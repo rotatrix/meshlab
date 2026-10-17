@@ -45,9 +45,10 @@ class PromotionChecks(unittest.TestCase):
 
     def test_all_required_platform_records_and_packages(self):
         names = promote.expected(SHA)
-        self.assertEqual(len(names), 13)
-        self.assertEqual(len([n for n in names if n.startswith('build-')]), 5)
+        self.assertEqual(len(names), 9)
+        self.assertEqual(len([n for n in names if n.startswith('build-')]), 4)
         self.assertFalse(any('installer' in n or 'double' in n for n in names))
+        self.assertFalse(any('linux-arm64' in n or 'sources-' in n for n in names))
         self.assertTrue(all(len(n) < 65 and '/' not in n for n in names))
 
     def test_original_ref_and_run_attestation(self):
@@ -105,6 +106,8 @@ class PromotionChecks(unittest.TestCase):
                             version='2025.07', windows_signed=False,
                             packages={name: hashlib.sha256(payloads[name]).hexdigest()
                                       for name in promote.platform_packages(platform, SHA)})
+            if platform == 'ubuntu-22.04':
+                metadata['packages'][f'MeshLab-sources-{SHA[:12]}.tar.gz'] = '0' * 64
             payloads[f'build-{platform}-{SHA[:12]}.json'] = json.dumps(metadata).encode()
         artifacts = [dict(id=i, name=name, expired=False,
                           workflow_run=dict(id=42, head_sha=SHA),

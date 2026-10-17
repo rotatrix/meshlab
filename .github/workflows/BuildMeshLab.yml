@@ -1,10 +1,6 @@
 name: BuildMeshLab
 
 on:
-  push:
-    branches: ['rotatrix/**']
-  pull_request:
-    branches: ['rotatrix/**']
   workflow_dispatch:
     inputs:
       platforms:
@@ -33,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(inputs.platforms == 'macos' && '["macos-15-intel","macos-15"]' || '["ubuntu-22.04","ubuntu-22.04-arm","macos-15-intel","macos-15","windows-2022"]') }}
+        os: ${{ fromJSON(inputs.platforms == 'macos' && '["macos-15-intel","macos-15"]' || '["ubuntu-22.04","macos-15-intel","macos-15","windows-2022"]') }}
         precision: [single_precision]
     steps:
       - uses: actions/checkout@v4
@@ -146,10 +142,6 @@ jobs:
           archive: false
           retention-days: 14
           if-no-files-found: error
-      - name: Preserve build sources
-        if: matrix.os == 'ubuntu-22.04'
-        shell: bash
-        run: python3 scripts/rotatrix/build_record.py sources
       - name: Record package hashes and configuration
         env:
           WINDOWS_SIGNED: ${{ runner.os == 'Windows' && github.repository == 'rotatrix/meshlab' && github.event_name != 'pull_request' && startsWith(github.ref, 'refs/heads/rotatrix/') && secrets.WIN_CERTIFICATE != '' && secrets.WIN_CERTIFICATE_PSSW != '' }}
@@ -169,14 +161,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           path: provenance/build-*.json
-          archive: false
-          retention-days: 14
-          if-no-files-found: error
-      - name: Upload build sources
-        if: matrix.os == 'ubuntu-22.04'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          path: portable/MeshLab-sources-*.tar.gz
           archive: false
           retention-days: 14
           if-no-files-found: error

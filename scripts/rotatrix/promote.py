@@ -10,7 +10,7 @@ from urllib.parse import quote
 
 REPO = 'rotatrix/meshlab'
 WORKFLOW = '.github/workflows/BuildMeshLab.yml'
-PLATFORMS = ('ubuntu-22.04', 'ubuntu-22.04-arm', 'windows-2022', 'macos-15', 'macos-15-intel')
+PLATFORMS = ('ubuntu-22.04', 'windows-2022', 'macos-15', 'macos-15-intel')
 TAG = re.compile(r'(MeshLab-[0-9]+\.[0-9]+)-rotatrix\.[1-9][0-9]*(?:-beta\.[1-9][0-9]*)?\Z')
 
 
@@ -56,8 +56,8 @@ def validate_run(run, sha):
 
 def expected(sha):
     short = sha[:12]
-    return {f'MeshLab-windows-x64-{short}.zip', f'MeshLab-sources-{short}.tar.gz',
-            *(f'MeshLab-linux-{arch}-{short}.{ext}' for arch in ('x64', 'arm64')
+    return {f'MeshLab-windows-x64-{short}.zip',
+            *(f'MeshLab-linux-{arch}-{short}.{ext}' for arch in ('x64',)
               for ext in ('tar.gz', 'AppImage')),
             *(f'macos-app-{arch}-{short}.tar.gz' for arch in ('x64', 'arm64')),
             *(f'build-{platform}-{short}.json' for platform in PLATFORMS)}
@@ -72,8 +72,6 @@ def platform_packages(platform, sha):
         return {f'macos-app-{arch}-{short}.tar.gz'}
     arch = 'arm64' if platform.endswith('-arm') else 'x64'
     names = {f'MeshLab-linux-{arch}-{short}.{ext}' for ext in ('tar.gz', 'AppImage')}
-    if arch == 'x64':
-        names.add(f'MeshLab-sources-{short}.tar.gz')
     return names
 
 
@@ -135,7 +133,7 @@ def prepare(tag, run_id, output):
     artifacts = pages(f'actions/runs/{run_id}/artifacts', 'artifacts')
     selected = [a for a in artifacts if a['name'] in expected(sha)]
     require(len(selected) == len(expected(sha)) and {a['name'] for a in selected} == expected(sha),
-            'Missing or duplicate packages, source snapshot or build records; rebuild explicitly')
+            'Missing or duplicate packages or build records; rebuild explicitly')
     output.mkdir(parents=True, exist_ok=True)
     records = []
     for artifact in selected:
@@ -157,11 +155,15 @@ def prepare(tag, run_id, output):
                 and len(set(metadata['plugins'])) == 75, 'Build record does not match required configuration')
         require(metadata['ref'] == 'refs/heads/' + run['head_branch'] and metadata['event'] == run['event'],
                 'Build record ref/event mismatch')
+        required_packages = platform_packages(platform, sha)
+        # Older trusted builds also recorded a source snapshot; do not promote it.
+        legacy_sources = {f'MeshLab-sources-{sha[:12]}.tar.gz'} if platform == 'ubuntu-22.04' else set()
         require(metadata['version'] == match[1].removeprefix('MeshLab-') and
-                set(metadata['packages']) == platform_packages(platform, sha),
+                required_packages <= set(metadata['packages']) and
+                set(metadata['packages']) <= required_packages | legacy_sources,
                 'Build version or platform package inventory mismatch')
-        for name, checksum in metadata['packages'].items():
-            require(by_name.get(name) == checksum, 'Build record package hash mismatch')
+        for name in required_packages:
+            require(by_name.get(name) == metadata['packages'][name], 'Build record package hash mismatch')
     prerelease = '-beta.' in tag
     require(tag_commit(tag) == sha, 'Tag changed during verification')
     plan = dict(repository=REPO, tag=tag, commit=sha, run_id=run_id, run_attempt=run['run_attempt'],

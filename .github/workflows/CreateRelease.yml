@@ -9,6 +9,10 @@ on:
         description: Existing immutable MeshLab release tag
         type: string
         required: true
+      create-tag-at:
+        description: Optional exact approved build SHA at which to create a new immutable tag
+        type: string
+        required: false
       build-run-id:
         description: Successful full-platform trusted build at the exact tagged SHA
         type: string
@@ -18,7 +22,7 @@ on:
         type: boolean
         default: false
       source-and-package-acceptance:
-        description: Package testing and corresponding-source/license completeness reviewed for this SHA
+        description: Package acceptance and repository-based source references reviewed for this SHA
         type: boolean
         default: false
 
@@ -38,6 +42,10 @@ jobs:
       (github.event_name == 'push' ||
        github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+      attestations: read
     outputs:
       artifact-id: ${{ steps.prepared.outputs.artifact-id }}
     steps:
@@ -49,6 +57,25 @@ jobs:
           python-version: '3.12'
       - name: Test promotion checks
         run: python3 -m unittest discover -s tests/rotatrix -v
+      - name: Create explicitly requested immutable tag
+        if: github.event_name == 'workflow_dispatch' && inputs.create-tag-at != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release-tag }}
+          SOURCE_SHA: ${{ inputs.create-tag-at }}
+          BUILD_RUN_ID: ${{ inputs.build-run-id }}
+        shell: bash
+        run: |
+          python3 - <<'PYTAG'
+          import json, os, re, subprocess, sys
+          sys.path.insert(0, 'scripts/rotatrix')
+          import promote
+          sha, tag = os.environ['SOURCE_SHA'], os.environ['RELEASE_TAG']
+          promote.require(re.fullmatch(r'[0-9a-f]{40}', sha) and promote.TAG.fullmatch(tag), 'Invalid tag/SHA')
+          promote.validate_run(promote.api('actions/runs/' + os.environ['BUILD_RUN_ID']), sha)
+          subprocess.run(['gh', 'api', '--method', 'POST', 'repos/rotatrix/meshlab/git/refs', '--input', '-'],
+                         input=json.dumps({'ref': 'refs/tags/' + tag, 'sha': sha}), text=True, check=True)
+          PYTAG
       - name: Verify original build and stage unchanged artifacts
         env:
           GH_TOKEN: ${{ github.token }}
