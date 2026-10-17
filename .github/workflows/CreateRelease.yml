@@ -6,6 +6,8 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -26,12 +28,6 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          MAC_CERT: ${{ secrets.MACOS_CERTIFICATE }}
-          MAC_ID: ${{ secrets.MACOS_CERT_ID }}
-          MAC_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PSSW }}
-          MAC_USER: ${{ secrets.MACOS_NOTARIZATION_USER }}
-          MAC_TEAM: ${{ secrets.MACOS_NOTARIZATION_TEAM_ID }}
-          MAC_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARIZATION_PSSW }}
           WIN_CERT: ${{ secrets.WIN_CERTIFICATE }}
           WIN_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PSSW }}
         shell: bash
@@ -45,7 +41,7 @@ jobs:
           git merge-base --is-ancestor "refs/tags/$base" HEAD
           if [[ "$prerelease" == false ]]; then
             git merge-base --is-ancestor HEAD "refs/remotes/origin/rotatrix/$base"
-            for variable in MAC_CERT MAC_ID MAC_PASSWORD MAC_USER MAC_TEAM MAC_NOTARY_PASSWORD WIN_CERT WIN_PASSWORD; do
+            for variable in WIN_CERT WIN_PASSWORD; do
               [[ -n "${!variable}" ]] || { echo "Required signing setting missing: $variable"; exit 1; }
             done
           fi
@@ -79,7 +75,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir release-assets
-          # Preserve upstream installers/AppImages/DMGs and portable bundles.
+          # Preserve Windows/Linux installers, AppImages and portable bundles.
+          # The completion relay sends macOS apps to the central signer.
           # Prefix the unique artifact directory to prevent package-name collisions.
           while IFS= read -r -d '' file; do
             directory=$(basename "$(dirname "$file")")

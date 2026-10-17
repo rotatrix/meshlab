@@ -2,29 +2,6 @@ name: 'Deploy'
 description: 'Deploy'
 
 inputs:
-  mac-certificate:
-    description: 'MacOS Certificate'
-    required: false
-    default: ''
-  mac-certificate-id:
-    description: 'MacOS Certificate ID'
-    required: false
-    default: ''
-  mac-certificate-pssw:
-    description: 'MacOS Certificate Password'
-    required: false
-  mac-notarization-user:
-    description: 'MacOS Notarization User'
-    required: false
-    default: ''
-  mac-notarization-team:
-    description: 'MacOS Notarization Team'
-    required: false
-    default: ''
-  mac-notarization-pssw:
-    description: 'MacOS Notarization Password'
-    required: false
-    default: ''
   win-certificate:
     description: 'Windows Certificate'
     required: false
@@ -79,25 +56,3 @@ runs:
             throw "Signature verification failed: $($file.Name)"
           }
         }
-    - name: Ad-hoc sign and verify macOS test bundle
-      if: runner.os == 'macOS' && inputs.mac-certificate == ''
-      shell: bash
-      run: bash scripts/macOS/internal/2b_adhoc_test_bundle.sh install/meshlab.app
-    - name: Sign and Notarize
-      if: runner.os == 'macOS' && inputs.mac-certificate != ''
-      uses: cnr-isti-vclab/sign-and-notarize@v1
-      with:
-        input-path: 'install/*.app'
-        macos-certificate: '${{ inputs.mac-certificate }}'
-        macos-certificate-id: '${{ inputs.mac-certificate-id }}'
-        macos-certificate-password: '${{ inputs.mac-certificate-pssw }}'
-        macos-notarization-team: '${{ inputs.mac-notarization-team }}'
-        macos-notarization-user: '${{ inputs.mac-notarization-user }}'
-        macos-notarization-password: '${{ inputs.mac-notarization-pssw }}'
-        # windows-certificate: '${{ inputs.win-certificate }}'
-        # windows-certificate-password: '${{ inputs.win-certificate-pssw }}'
-    - name: DMG
-      shell: bash
-      if: ${{ runner.os == 'macOS' }}
-      run: |
-        bash scripts/${{ runner.os }}/3_dmg.sh

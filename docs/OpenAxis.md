@@ -97,8 +97,8 @@ ctest --test-dir build-local/tests -C Release --output-on-failure
 The source, composite actions and platform scripts start at official tag
 `MeshLab-2025.07` (commit `dc48b91ae562756a6988048c5d5c7f1d2b687256`).
 The upstream setup/build/deploy sequence, plugins, two precision variants and
-portable/installer/AppImage/DMG packaging are retained. We do not import upstream
-main's workflow wholesale.
+Windows/Linux portable/installer/AppImage packaging are retained. macOS uses the
+app-only archive described below. We do not import upstream main's workflow wholesale.
 
 | Area | Release-tag baseline | Current adaptation and reason |
 | --- | --- | --- |
@@ -129,9 +129,9 @@ preview releases remain legacy test snapshots; new development happens on the wo
 platform scripts. Pushes to `rotatrix/**`, PRs to `rotatrix/*`, and manual runs
 build Linux x64/ARM64, macOS Intel/ARM64, and Windows x64, in both upstream
 single- and double-precision configurations. It runs the OpenAxis regressions,
-then uploads upstream portable bundles and installers/AppImages/DMGs as artifacts
-named with the source SHA, retained for 14 days. Work-branch pushes create no
-release or tag. A missing desktop GL context explicitly skips the GL-only tests.
+then uploads Windows/Linux portable bundles and installers/AppImages, plus macOS
+app-only archives named with architecture, precision and source SHA, retained for
+14 days. Work-branch pushes create no release or tag. A missing desktop GL context explicitly skips the GL-only tests.
 
 When ready, clean up the downstream patch stack and create maintained branch
 `rotatrix/MeshLab-2025.07`; set that branch as the GitHub default at that time.
@@ -146,25 +146,42 @@ Permanent test releases use `MeshLab-2025.07-rotatrix.1-beta.1` and are publishe
 as prereleases. Existing release assets are never overwritten. Do not move or
 delete release tags; increase the suffix instead. No release tag is created by CI.
 
-macOS work builds have no Developer ID signature and are not notarized. Build-only
-static archives are removed from the test bundle's Frameworks directory. After
-Qt deployment, CI applies certificate-free ad-hoc signatures inside out and
-verifies the complete app before producing the portable archive and DMG. This
-ensures internal signature integrity, including on Apple Silicon; it does not
-grant Gatekeeper trust to downloaded test builds. An unidentified-developer or
-notarization warning can still require an explicit local approval in macOS
-Privacy & Security. A "damaged" warning should be investigated rather than
-treated as proof that ordinary unsigned builds are unusable.
+### macOS app archives and release signing
 
-Stable releases require the existing upstream signing secrets:
-`MACOS_CERTIFICATE` (base64), `MACOS_CERT_ID`, `MACOS_CERTIFICATE_PSSW`,
-`MACOS_NOTARIZATION_USER`, `MACOS_NOTARIZATION_TEAM_ID`,
-`MACOS_NOTARIZATION_PSSW`, `WIN_CERTIFICATE` (base64 PFX), and
-`WIN_CERTIFICATE_PSSW`. These are not configured on the fork yet. Stable release
-validation fails clearly until they are supplied. Work artifacts and beta builds
-can be unsigned; PR runs receive no signing credentials. The Windows path uses
-upstream's signing/installer scripts and verifies signatures; macOS uses upstream's
-sign-and-notarize action before making the DMG.
+Every macOS build produces `macos-app-<architecture>-<precision>-<sha>.tar.gz`
+containing only upstream-named `meshlab.app`. Both macOS architectures and both
+precisions remain in the matrix. The upstream deployment step bundles runtime
+libraries; `scripts/macOS/3_pack_app.sh` completes missing transitive Homebrew
+`@rpath` dylibs (for example Brotli/SharpYUV with Qt 5.15.19), checks that runtime
+dependencies resolve inside the app or to system libraries, adds source and
+dependency license notices inside Resources, and signs the final
+contents ad hoc, archives them, extracts the archive and verifies its signature and
+`--version` startup. Framework symlinks and executable permissions are retained.
+No DMG or outer ZIP is uploaded. The pinned upload-artifact v7 action uses
+`archive: false`.
+
+Local example after upstream build/install/deploy (use the Qt version used to build):
+
+```bash
+QT_ROOT=/opt/homebrew/opt/qt@5 bash scripts/macOS/3_pack_app.sh \
+  install/meshlab.app build artifacts "arm64-single_precision-$(git rev-parse HEAD)"
+```
+
+Previews have ad-hoc signatures and are not notarized. Tag builds create GitHub
+build provenance for the same archive; after the entire **Rotatrix release** run
+succeeds, `RequestReleaseSigning.yml` requests central Developer ID signing and
+notarization from `rotatrix/release-signing`. Source workflows use no Apple secrets.
+The relay must be on the repository default branch and its `signing-dispatch`
+environment must provide `SIGNER_DISPATCH_TOKEN` with Actions write access to the
+signer. The signer publishes signed archives to the existing tag's release without
+replacing Windows/Linux assets. Source release publishing selects only the
+`MeshLab-*` Windows/Linux artifacts, so ad-hoc macOS archives are not published as
+release assets. Stable Windows releases still require `WIN_CERTIFICATE` and
+`WIN_CERTIFICATE_PSSW`.
+
+Local archive validation does not establish Intel compatibility or replace testing
+downloaded CI artifacts and physical-device acceptance. No signing relay dispatch,
+tag or release is needed for local validation.
 
 Before tagging, test rotation, pan, zoom, native-mouse continuation, both
 projections, reconnect, application/modal focus, multiple documents/viewports,

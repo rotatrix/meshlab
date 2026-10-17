@@ -20,6 +20,8 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 concurrency:
   group: meshlab-${{ github.workflow }}-${{ github.ref }}
@@ -97,15 +99,29 @@ jobs:
         uses: ./.github/actions/2_deploy
         with:
           use-brew-qt: ${{ matrix.os == 'macos-15' }}
-          mac-certificate: ${{ inputs.release-build && secrets.MACOS_CERTIFICATE || '' }}
-          mac-certificate-id: ${{ inputs.release-build && secrets.MACOS_CERT_ID || '' }}
-          mac-certificate-pssw: ${{ inputs.release-build && secrets.MACOS_CERTIFICATE_PSSW || '' }}
-          mac-notarization-user: ${{ inputs.release-build && secrets.MACOS_NOTARIZATION_USER || '' }}
-          mac-notarization-team: ${{ inputs.release-build && secrets.MACOS_NOTARIZATION_TEAM_ID || '' }}
-          mac-notarization-pssw: ${{ inputs.release-build && secrets.MACOS_NOTARIZATION_PSSW || '' }}
           win-certificate: ${{ inputs.release-build && secrets.WIN_CERTIFICATE || '' }}
           win-certificate-pssw: ${{ inputs.release-build && secrets.WIN_CERTIFICATE_PSSW || '' }}
+      - name: Package and smoke-test macOS app
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          if [[ "${{ matrix.os }}" == macos-15 ]]; then export QT_ROOT="$(brew --prefix qt@5)"; fi
+          bash scripts/macOS/3_pack_app.sh install/meshlab.app build portable "$(uname -m)-${{ matrix.precision }}-${GITHUB_SHA}"
+      - name: Upload macOS app
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          path: portable/macos-app-*.tar.gz
+          archive: false
+          retention-days: 14
+          if-no-files-found: error
+      - name: Attest release macOS app
+        if: runner.os == 'macOS' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: portable/macos-app-*.tar.gz
       - name: Source provenance and portable archive
+        if: runner.os != 'macOS'
         shell: bash
         run: |
           set -euo pipefail
@@ -119,6 +135,7 @@ jobs:
             tar -czf "portable/$name.tar.gz" -C install .
           fi
       - name: Upload MeshLab Portable
+        if: runner.os != 'macOS'
         uses: actions/upload-artifact@v4
         with:
           name: MeshLab-${{ runner.os }}-portable-${{ steps.envs.outputs.artifact_suffix }}-${{ github.sha }}
@@ -126,6 +143,7 @@ jobs:
           retention-days: 14
           if-no-files-found: error
       - name: Upload MeshLab Packages
+        if: runner.os != 'macOS'
         uses: actions/upload-artifact@v4
         with:
           name: MeshLab-${{ runner.os }}-packages-${{ steps.envs.outputs.artifact_suffix }}-${{ github.sha }}
