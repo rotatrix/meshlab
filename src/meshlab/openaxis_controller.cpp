@@ -191,9 +191,13 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         view.update();
     }
     bool available() const {
+        // An idle editor (including Escape-suspended tools) can coexist with
+        // navigation. Hold the camera still during mouse-driven tool operations.
+        const bool editingDrag = view.currentEditor && !view.suspendedEditor &&
+            QApplication::mouseButtons() != Qt::NoButton;
         return view.isVisible() && view.isCurrent() && view.isValid() && view.isEnabled() &&
             view.width() > 0 && view.height() > 0 && !view.md()->isBusy() &&
-            !view._isRaster && !view.takeSnapTile && !view.currentEditor;
+            !view._isRaster && !view.takeSnapTile && !editingDrag;
     }
     bool active() const {
         return hub->current==this && eligible();

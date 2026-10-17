@@ -55,6 +55,10 @@ without a first-gesture spatial-index build. Selection-only picks render selecte
 faces and vertices into an offscreen buffer without changing visible depth or selection, preserving
 the viewport projection so rendered point sizes remain pickable.
 Background pixels use Rotatrix's configured fallback.
+Navigation remains available while an editing tool is idle or suspended with
+Escape. It pauses while a mouse button is held in an active editing tool, to
+avoid moving the camera during operations such as rectangle selection. Multi-click
+or keyboard-driven editors do not have additional tool-specific guards.
 World orientation is right-handed, Y-up, matching MeshLab's default view.
 
 ## Build locally on Windows
