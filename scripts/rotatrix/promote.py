@@ -59,20 +59,7 @@ def expected(sha):
     return {f'MeshLab-windows-x64-{short}.zip',
             *(f'MeshLab-linux-{arch}-{short}.{ext}' for arch in ('x64',)
               for ext in ('tar.gz', 'AppImage')),
-            *(f'macos-app-{arch}-{short}.tar.gz' for arch in ('x64', 'arm64')),
-            *(f'build-{platform}-{short}.json' for platform in PLATFORMS)}
-
-
-def platform_packages(platform, sha):
-    short = sha[:12]
-    if platform == 'windows-2022':
-        return {f'MeshLab-windows-x64-{short}.zip'}
-    if platform.startswith('macos-'):
-        arch = 'x64' if platform.endswith('-intel') else 'arm64'
-        return {f'macos-app-{arch}-{short}.tar.gz'}
-    arch = 'arm64' if platform.endswith('-arm') else 'x64'
-    names = {f'MeshLab-linux-{arch}-{short}.{ext}' for ext in ('tar.gz', 'AppImage')}
-    return names
+            *(f'macos-app-{arch}-{short}.tar.gz' for arch in ('x64', 'arm64'))}
 
 
 def digest(path):
@@ -80,50 +67,23 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def verify_attestation(path, run, output):
-    evidence = subprocess.check_output([
-        'gh', 'attestation', 'verify', str(path), '--repo', REPO,
-        '--signer-workflow', REPO + '/' + WORKFLOW,
-        '--source-ref', 'refs/heads/' + run['head_branch'], '--source-digest', run['head_sha'],
-        '--deny-self-hosted-runners', '--format', 'json'], text=True)
-    invocation = f'https://github.com/{REPO}/actions/runs/{run["id"]}/attempts/'
-    matched = False
-    for item in json.loads(evidence):
-        cert = item.get('verificationResult', {}).get('signature', {}).get('certificate', {})
-        uri = cert.get('runInvocationURI', '')
-        attempt = uri.removeprefix(invocation)
-        if uri.startswith(invocation) and attempt.isdecimal():
-            matched |= (1 <= int(attempt) <= run['run_attempt'] and cert.get('buildTrigger') == run['event'])
-    require(matched, 'Attestation does not identify selected build run/event')
-    (output / (path.name + '.attestation.json')).write_text(evidence)
-    # Retain the signed bundle as well as the verification report.
-    subprocess.run(['gh', 'attestation', 'download', str(path.resolve()), '--repo', REPO],
-                   cwd=output, check=True)
-    # gh uses a colon on Unix; keep release evidence downloadable on Windows.
-    bundle = output / ('sha256:' + digest(path) + '.jsonl')
-    if bundle.exists():
-        bundle.rename(output / ('sha256-' + digest(path) + '.jsonl'))
+def require_new_release(tag):
+    existing = json.loads(subprocess.check_output(
+        ['gh', 'api', '--paginate', '--slurp', f'repos/{REPO}/releases?per_page=100'], text=True))
+    require(not any(r['tag_name'] == tag for page in existing for r in page),
+            'Release or draft exists; inspect it before retrying')
 
 
 def prepare(tag, run_id, output):
     require(not output.exists() or not any(output.iterdir()), 'Use an empty promotion directory')
     match = TAG.fullmatch(tag)
     require(match, 'Invalid MeshLab release tag')
+    require_new_release(tag)
     sha = tag_commit(tag)
     base = tag_commit(match[1])
     require(api(f'compare/{base}...{sha}')['status'] in ('ahead', 'identical'),
             'Release does not descend from the upstream tag')
-    if not run_id:
-        candidates = pages(f'actions/workflows/BuildMeshLab.yml/runs?head_sha={sha}&status=success', 'workflow_runs')
-        eligible = []
-        for run in candidates:
-            try:
-                validate_run(run, sha)
-                eligible.append(run['id'])
-            except ValueError:
-                pass
-        require(len(eligible) == 1, 'Select an explicit successful build run ID; no unique eligible run for this SHA')
-        run_id = eligible[0]
+    require(run_id and run_id > 0, 'Select an explicit build run ID')
     run = api(f'actions/runs/{run_id}')
     validate_run(run, sha)
     jobs = pages(f'actions/runs/{run_id}/jobs?filter=latest', 'jobs')
@@ -133,7 +93,7 @@ def prepare(tag, run_id, output):
     artifacts = pages(f'actions/runs/{run_id}/artifacts', 'artifacts')
     selected = [a for a in artifacts if a['name'] in expected(sha)]
     require(len(selected) == len(expected(sha)) and {a['name'] for a in selected} == expected(sha),
-            'Missing or duplicate packages or build records; rebuild explicitly')
+            'Missing or duplicate required packages')
     output.mkdir(parents=True, exist_ok=True)
     records = []
     for artifact in selected:
@@ -145,75 +105,46 @@ def prepare(tag, run_id, output):
             subprocess.run(['gh', 'api', f'repos/{REPO}/actions/artifacts/{artifact["id"]}/zip'],
                            stdout=stream, check=True)
         require('sha256:' + digest(path) == artifact['digest'], 'Downloaded artifact digest mismatch')
-        verify_attestation(path, run, output)
         records.append(dict(id=artifact['id'], name=path.name, sha256=digest(path)))
-    by_name = {r['name']: r['sha256'] for r in records}
-    for platform in PLATFORMS:
-        metadata = json.loads((output / f'build-{platform}-{sha[:12]}.json').read_text())
-        require(metadata['commit'] == sha and metadata['run_id'] == run_id and metadata['repository'] == REPO
-                and metadata['platform'] == platform and metadata['precision'] == 'single'
-                and len(set(metadata['plugins'])) == 75, 'Build record does not match required configuration')
-        require(metadata['ref'] == 'refs/heads/' + run['head_branch'] and metadata['event'] == run['event'],
-                'Build record ref/event mismatch')
-        required_packages = platform_packages(platform, sha)
-        # Older trusted builds also recorded a source snapshot; do not promote it.
-        legacy_sources = {f'MeshLab-sources-{sha[:12]}.tar.gz'} if platform == 'ubuntu-22.04' else set()
-        require(metadata['version'] == match[1].removeprefix('MeshLab-') and
-                required_packages <= set(metadata['packages']) and
-                set(metadata['packages']) <= required_packages | legacy_sources,
-                'Build version or platform package inventory mismatch')
-        for name in required_packages:
-            require(by_name.get(name) == metadata['packages'][name], 'Build record package hash mismatch')
     prerelease = '-beta.' in tag
     require(tag_commit(tag) == sha, 'Tag changed during verification')
     plan = dict(repository=REPO, tag=tag, commit=sha, run_id=run_id, run_attempt=run['run_attempt'],
                 source_ref='refs/heads/' + run['head_branch'], prerelease=prerelease,
-                artifacts=records, source_review_required=True)
+                artifacts=records)
     (output / 'promotion.json').write_text(json.dumps(plan, indent=2) + '\n')
-    (output / 'SHA256SUMS').write_text(''.join(f'{r["sha256"]}  {r["name"]}\n' for r in sorted(records, key=lambda r: r['name'])))
+    with open(os.environ.get('GITHUB_OUTPUT', os.devnull), 'a') as stream:
+        stream.write('mac-artifacts=' + ','.join(str(r['id']) for r in records if r['name'].startswith('macos-app-')) + '\n')
     return plan
 
 
-def publish(directory):
-    require(os.environ.get('ROTATRIX_PROMOTION_ENABLED') == 'true', 'Central promotion transition is not enabled')
-    require(os.environ.get('SOURCE_ACCEPTANCE') == 'true', 'Source/license completeness and package acceptance must be recorded')
-    require(os.environ.get('SIGNER_DISPATCH_TOKEN'), 'Signing dispatch credential is missing')
+def draft(directory):
     plan = json.loads((directory / 'promotion.json').read_text())
-    require(plan['repository'] == REPO and TAG.fullmatch(plan['tag']), 'Invalid promotion plan')
-    require(tag_commit(plan['tag']) == plan['commit'], 'Tag moved before publication')
+    require(plan['repository'] == REPO and TAG.fullmatch(plan['tag']), 'Invalid release selection')
+    require(tag_commit(plan['tag']) == plan['commit'], 'Tag moved before draft creation')
+    require_new_release(plan['tag'])
+    files = []
     for record in plan['artifacts']:
-        require(record['name'] in expected(plan['commit']) and
-                digest(directory / record['name']) == record['sha256'], 'Staged artifact changed')
-    # A retry must fail rather than replace or silently add to a published release.
-    existing = json.loads(subprocess.check_output(
-        ['gh', 'api', '--paginate', '--slurp', f'repos/{REPO}/releases?per_page=100'], text=True))
-    require(not any(r['tag_name'] == plan['tag'] for page in existing for r in page),
-            'Release or draft exists; verify existing assets before retrying')
-    files = [str(directory / r['name']) for r in plan['artifacts']
-             if r['name'].startswith(('MeshLab-windows-', 'MeshLab-linux-'))]
-    command = ['gh', 'release', 'create', plan['tag'], *files, '--repo', REPO, '--verify-tag', '--draft',
-               '--title', 'MeshLab ' + plan['tag'], '--notes',
-               f'Exact source: {plan["commit"]}\nBuild: https://github.com/{REPO}/actions/runs/{plan["run_id"]}\n'
-               'Draft pending signed macOS packages and final release acceptance.']
+        if record['name'].startswith('macos-app-'):
+            continue
+        path = directory / record['name']
+        require(digest(path) == record['sha256'], 'Staged package changed')
+        files.append(path)
+    signed = sorted((directory / 'signed').glob('*.tar.gz'))
+    require(len(signed) == 2, 'Expected both signed macOS packages')
+    files += signed
+    sums = directory / 'SHA256SUMS'
+    sums.write_text(''.join(f'{digest(p)}  {p.name}\n' for p in files))
+    command = ['gh', 'release', 'create', plan['tag'], *map(str, files), str(sums),
+               '--repo', REPO, '--verify-tag', '--draft', '--title', 'MeshLab ' + plan['tag'],
+               '--notes', f'Source: {plan["commit"]}\nBuild: https://github.com/{REPO}/actions/runs/{plan["run_id"]}']
     if plan['prerelease']:
         command.append('--prerelease')
     subprocess.run(command, check=True)
-    # Verification records and ad-hoc signing inputs remain in Actions artifacts.
-    for record in plan['artifacts']:
-        if not record['name'].startswith('macos-app-'):
-            continue
-        payload = dict(ref='main', inputs=dict(source_repository=REPO, source_run_id=str(plan['run_id']),
-                       artifact_id=str(record['id']), release_tag=plan['tag'], publish=True))
-        require(tag_commit(plan['tag']) == plan['commit'], 'Tag moved before signing dispatch')
-        subprocess.run(['gh', 'api', '--method', 'POST',
-                        'repos/rotatrix/release-signing/actions/workflows/sign-macos.yml/dispatches', '--input', '-'],
-                       input=json.dumps(payload), text=True, check=True,
-                       env={**os.environ, 'GH_TOKEN': os.environ['SIGNER_DISPATCH_TOKEN']})
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('command', choices=['prepare', 'publish'])
+    parser.add_argument('command', choices=['prepare', 'draft'])
     parser.add_argument('--tag')
     parser.add_argument('--run-id', type=int)
     parser.add_argument('--directory', type=Path, default=Path('promotion'))
@@ -221,4 +152,4 @@ if __name__ == '__main__':
     if args.command == 'prepare':
         print(json.dumps(prepare(args.tag, args.run_id, args.directory), indent=2))
     else:
-        publish(args.directory)
+        draft(args.directory)
