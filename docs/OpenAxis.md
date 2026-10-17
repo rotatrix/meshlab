@@ -46,12 +46,13 @@ reports unfocused while the transport and retry scheduler continue running.
 The last viewport closing tears down the connection. Separate MeshLab processes
 have separate connections and process IDs.
 
-Model bounds use visible transformed meshes. Selection bounds currently mean the
-active mesh layer. Cursor and viewport-center picks use MeshLab's upstream
+Model bounds use visible transformed meshes. Selection bounds use explicitly
+selected faces and vertices across visible layers, including layer transforms.
+An active layer alone is not a geometry selection. Cursor and viewport-center picks use MeshLab's upstream
 depth-buffer picker (`vcg::Pick`) during a current-camera repaint, before the
 trackball overlay is drawn. This works with both rendered meshes and point clouds,
-without a first-gesture spatial-index build. Selection-only picks render the active
-layer into an offscreen buffer without changing visible depth or selection, preserving
+without a first-gesture spatial-index build. Selection-only picks render selected
+faces and vertices into an offscreen buffer without changing visible depth or selection, preserving
 the viewport projection so rendered point sizes remain pickable.
 Background pixels use Rotatrix's configured fallback.
 World orientation is right-handed, Y-up, matching MeshLab's default view.

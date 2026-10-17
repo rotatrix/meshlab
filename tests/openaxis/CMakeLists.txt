@@ -9,9 +9,11 @@ target_compile_features(camera_tests PRIVATE cxx_std_17)
 target_include_directories(camera_tests PRIVATE
     "${OPENAXIS_SOURCE_DIR}/cpp/include" "${CMAKE_CURRENT_SOURCE_DIR}/../../src/meshlab")
 add_test(NAME openaxis_camera_mapping COMMAND camera_tests)
-add_executable(picking_tests picking_tests.cpp)
+add_executable(picking_tests picking_tests.cpp ../../src/common/ml_document/cmesh.cpp)
 target_compile_features(picking_tests PRIVATE cxx_std_17)
+target_compile_definitions(picking_tests PRIVATE MESHLAB_SCALAR=float)
 target_include_directories(picking_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../src"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../src/vcglib"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../src/vcglib/eigenlib"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../src/meshlab")

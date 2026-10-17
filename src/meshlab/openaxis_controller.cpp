@@ -7,6 +7,7 @@
 #include "openaxis_controller.h"
 #include "openaxis_camera.h"
 #include "openaxis_picking.h"
+#include "openaxis_selection.h"
 #include "openaxis_pivot.h"
 #include "openaxis_scheduler.h"
 #include "openaxis_focus.h"
@@ -302,8 +303,9 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         if (name == "model.bounds" || name == "selection.bounds") {
             vcg::Box3<Scalarm> bounds;
             for (auto &mesh : view.md()->meshIterator()) {
-                if (!view.meshVisibilityMap.value(mesh.id(), false) || (name == "selection.bounds" && &mesh != view.mm())) continue;
-                bounds.Add(mesh.cm.Tr, mesh.cm.bbox);
+                if (!view.meshVisibilityMap.value(mesh.id(), false)) continue;
+                if (name == "selection.bounds") bounds.Add(meshlab_openaxis::selectionBounds(mesh.cm));
+                else bounds.Add(mesh.cm.Tr, mesh.cm.bbox);
             }
             if (!bounds.IsNull()) return {{"min", openaxis::vector_value(vector(bounds.min))}, {"max", openaxis::vector_value(vector(bounds.max))}};
         }
@@ -316,7 +318,7 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
             pickPending = true;
             // Repaint synchronously to sample the current camera's depth while
             // the native scene matrices are installed. No geometry index or CPU
-            // face traversal; the same path also picks rendered point clouds.
+            // face traversal for ordinary picks; selection picks filter native flags.
             view.repaint();
             pickPending = false;
             return pickResult;
@@ -344,18 +346,13 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         std::optional<vcg::Point3d> hit;
         if (!pickSelection) {
             hit = meshlab_openaxis::pickDepth((*pixel)[0],(*pixel)[1]);
-        } else if (auto *mesh = view.mm()) {
-            if (!view.meshVisibilityMap.value(mesh->id(),false)) return;
+        } else {
             hit = meshlab_openaxis::pickLayerDepth((*pixel)[0],(*pixel)[1], [&] {
-                auto *shared = view.mvc()->sharedDataContext();
-                shared->setMeshTransformationMatrix(mesh->id(),mesh->cm.Tr);
-                shared->draw(mesh->id(),view.context());
+                glPointSize(view.glas.pointSize);
+                for (const auto &mesh : view.md()->meshIterator())
+                    if (view.meshVisibilityMap.value(mesh.id(),false))
+                        meshlab_openaxis::drawSelectionDepth(mesh.cm);
             });
-            if (hit) {
-                vcg::Box3<Scalarm> bounds; bounds.Add(mesh->cm.Tr,mesh->cm.bbox);
-                if (!bounds.IsNull()) pickResult["bounds"] = {{"min",openaxis::vector_value(vector(bounds.min))},
-                                                             {"max",openaxis::vector_value(vector(bounds.max))}};
-            }
         }
         if (hit) pickResult["point"] = openaxis::vector_value(vector(*hit));
     }

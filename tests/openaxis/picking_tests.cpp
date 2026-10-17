@@ -4,6 +4,8 @@
 #include <QOpenGLFunctions>
 #include "openaxis_picking.h"
 #include "openaxis_pivot.h"
+#include "openaxis_selection.h"
+#include "common/ml_document/cmesh.h"
 #include <chrono>
 #include <fstream>
 #include <iostream>
@@ -33,6 +35,34 @@ int runTests(int argc, char **argv) {
     glEnable(GL_DEPTH_TEST);
     glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(-1,1,-1,1,-2,2);
     glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+    CMeshO selected;
+    vcg::tri::Allocator<CMeshO>::AddVertices(selected,4);
+    selected.vert[0].P()={-.5f,-.5f,0};
+    selected.vert[1].P()={.5f,-.5f,0};
+    selected.vert[2].P()={0,.5f,0};
+    selected.vert[3].P()={.8f,.8f,0};
+    vcg::tri::Allocator<CMeshO>::AddFaces(selected,1);
+    for (int i=0;i<3;++i) selected.face[0].V(i)=&selected.vert[i];
+    selected.Tr.SetIdentity();
+    if (!meshlab_openaxis::selectionBounds(selected).IsNull()) return 12;
+    auto selectedHit=[&](int x,int y) {
+        return meshlab_openaxis::pickLayerDepth(x,y,[&] { meshlab_openaxis::drawSelectionDepth(selected); });
+    };
+    if (selectedHit(128,128)) return 13;
+    selected.face[0].SetS();
+    if (!selectedHit(128,128) || selectedHit(230,230)) return 14;
+    selected.Tr.SetTranslate(0,0,.5f);
+    auto selectedBounds=meshlab_openaxis::selectionBounds(selected);
+    auto selectedPoint=selectedHit(128,128);
+    if (selectedBounds.min!=vcg::Point3f(-.5f,-.5f,.5f) ||
+        selectedBounds.max!=vcg::Point3f(.5f,.5f,.5f) ||
+        !selectedPoint || std::abs(selectedPoint->Z()-.5)>1e-4) return 15;
+    selected.face[0].ClearS();
+    selected.vert[3].SetS();
+    glPointSize(9);
+    if (selectedHit(128,128) || !selectedHit(230,230)) return 16;
+    selected.vert[3].SetD();
+    if (!meshlab_openaxis::selectionBounds(selected).IsNull() || selectedHit(230,230)) return 17;
     glClearDepth(1); glClear(GL_DEPTH_BUFFER_BIT);
     if (meshlab_openaxis::pickDepth(128,128)) return 1;
     glBegin(GL_TRIANGLES); glVertex3f(-1,-1,0); glVertex3f(1,-1,0); glVertex3f(0,1,0); glEnd();
@@ -70,7 +100,7 @@ int runTests(int argc, char **argv) {
     const int viewport[4]={10,20,800,600};
     auto pixel=meshlab_openaxis::depthPixel(100,50,400,300,viewport);
     if (!pixel || (*pixel)[0]!=210 || (*pixel)[1]!=519 || meshlab_openaxis::depthPixel(-1,0,400,300,viewport)) return 4;
-    std::cout << "Native depth picking: triangle, point cloud, selection depth isolation, background and HiDPI mapping passed\n";
+    std::cout << "Native depth picking: triangle, point cloud, explicit face/vertex selection, transformed bounds, deleted elements, depth isolation, background and HiDPI mapping passed\n";
     if (argc>1) {
         // Optional regression input: the reported binary little-endian PLY with
         // float XYZ vertices and uchar/int triangle lists. Never modifies it.
