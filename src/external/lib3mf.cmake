@@ -46,6 +46,19 @@ if(MESHLAB_ALLOW_DOWNLOAD_SOURCE_LIB3MF)
 
   if(EXISTS ${LIB3MF_CHECK})
     message(STATUS "- Lib3MF - Using downloaded Lib3MF sources")
+    # Backport the missing std::find header for GCC 15 from lib3mf:
+    # https://github.com/3MFConsortium/lib3mf/commit/96b2f5ec9714088907fe8a6f05633e2bbd82053f
+    set(LIB3MF_SORTER "${LIB3MF_DIR}/Source/Model/Writer/v100/NMR_ResourceDependencySorter.cpp")
+    file(READ "${LIB3MF_SORTER}" LIB3MF_SORTER_SOURCE)
+    if(NOT LIB3MF_SORTER_SOURCE MATCHES "#include <algorithm>")
+      if(NOT LIB3MF_SORTER_SOURCE MATCHES "#include \"Model/Writer/v100/NMR_ResourceDependencySorter.h\"")
+        message(FATAL_ERROR "Cannot apply lib3mf 2.4.1 missing-header fix")
+      endif()
+      string(REPLACE "#include \"Model/Writer/v100/NMR_ResourceDependencySorter.h\""
+        "#include \"Model/Writer/v100/NMR_ResourceDependencySorter.h\"\n\n#include <algorithm>"
+        LIB3MF_SORTER_SOURCE "${LIB3MF_SORTER_SOURCE}")
+      file(WRITE "${LIB3MF_SORTER}" "${LIB3MF_SORTER_SOURCE}")
+    endif()
     set(MESSAGE_QUIET ON)
     set(LIB3MF_TESTS OFF)
     set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
