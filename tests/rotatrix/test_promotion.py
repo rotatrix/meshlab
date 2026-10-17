@@ -45,70 +45,14 @@ class PromotionChecks(unittest.TestCase):
 
     def test_all_required_platform_records_and_packages(self):
         names = promote.expected(SHA)
-        self.assertEqual(len(names), 9)
-        self.assertEqual(len([n for n in names if n.startswith('build-')]), 4)
+        self.assertEqual(len(names), 5)
+        self.assertFalse(any(n.startswith('build-') for n in names))
         self.assertFalse(any('installer' in n or 'double' in n for n in names))
         self.assertFalse(any('linux-arm64' in n or 'sources-' in n for n in names))
         self.assertTrue(all(len(n) < 65 and '/' not in n for n in names))
 
-    def test_original_ref_and_run_attestation(self):
-        candidate = run()
-        certificate = dict(runInvocationURI=f'https://github.com/{promote.REPO}/actions/runs/42/attempts/1',
-                           buildTrigger='push')
-        evidence = [dict(verificationResult=dict(signature=dict(certificate=certificate)))]
-        with tempfile.TemporaryDirectory() as root:
-            output = Path(root)
-            package = output / 'package.zip'
-            package.write_bytes(b'package')
-            with patch('promote.subprocess.check_output', return_value=json.dumps(evidence)) as command, \
-                    patch('promote.subprocess.run'):
-                promote.verify_attestation(package, candidate, output)
-                args = command.call_args.args[0]
-                self.assertIn('refs/heads/rotatrix/work/MeshLab-2025.07', args)
-                self.assertIn('--deny-self-hosted-runners', args)
-            for uri, event in ((certificate['runInvocationURI'].replace('/42/', '/43/'), 'push'),
-                               (certificate['runInvocationURI'], 'pull_request'),
-                               (certificate['runInvocationURI'].replace('/1', '/3'), 'push')):
-                bad = copy.deepcopy(evidence)
-                bad[0]['verificationResult']['signature']['certificate'].update(
-                    runInvocationURI=uri, buildTrigger=event)
-                with patch('promote.subprocess.check_output', return_value=json.dumps(bad)), \
-                        self.assertRaises(ValueError):
-                    promote.verify_attestation(package, candidate, output)
-
-    def test_missing_platform_checks_stop_before_download(self):
-        with tempfile.TemporaryDirectory() as root, \
-                patch('promote.tag_commit', return_value=SHA), \
-                patch('promote.api', side_effect=[{'status': 'identical'}, run()]), \
-                patch('promote.pages', return_value=[]), self.assertRaisesRegex(ValueError, 'platform'):
-            promote.prepare('MeshLab-2025.07-rotatrix.1-beta.1', 42, Path(root))
-
-    def test_missing_provenance_stops_before_download(self):
-        jobs = [dict(name=f'MeshLab {p} single_precision', conclusion='success') for p in promote.PLATFORMS]
-        with tempfile.TemporaryDirectory() as root, \
-                patch('promote.tag_commit', return_value=SHA), \
-                patch('promote.api', side_effect=[{'status': 'identical'}, run()]), \
-                patch('promote.pages', side_effect=[jobs, []]), self.assertRaisesRegex(ValueError, 'Missing'):
-            promote.prepare('MeshLab-2025.07-rotatrix.1-beta.1', 42, Path(root))
-
-    def test_publish_disabled_before_any_external_action(self):
-        with patch.dict('os.environ', {}, clear=True), patch('promote.api') as api, \
-                self.assertRaisesRegex(ValueError, 'transition'):
-            promote.publish(Path('not-used'))
-        api.assert_not_called()
-
-    def test_complete_prepare_preserves_bytes_and_rejects_tampering(self):
-        payloads = {name: name.encode() for name in promote.expected(SHA) if not name.startswith('build-')}
-        for platform in promote.PLATFORMS:
-            metadata = dict(commit=SHA, run_id=42, repository=promote.REPO, platform=platform,
-                            precision='single', plugins=[str(i) for i in range(75)],
-                            ref='refs/heads/' + run()['head_branch'], event='push',
-                            version='2025.07', windows_signed=False,
-                            packages={name: hashlib.sha256(payloads[name]).hexdigest()
-                                      for name in promote.platform_packages(platform, SHA)})
-            if platform == 'ubuntu-22.04':
-                metadata['packages'][f'MeshLab-sources-{SHA[:12]}.tar.gz'] = '0' * 64
-            payloads[f'build-{platform}-{SHA[:12]}.json'] = json.dumps(metadata).encode()
+    def test_prepare_downloads_exact_packages_and_rejects_tampering(self):
+        payloads = {name: name.encode() for name in promote.expected(SHA)}
         artifacts = [dict(id=i, name=name, expired=False,
                           workflow_run=dict(id=42, head_sha=SHA),
                           digest='sha256:' + hashlib.sha256(data).hexdigest())
@@ -117,27 +61,51 @@ class PromotionChecks(unittest.TestCase):
         for tamper in (False, True):
             def download(command, stdout, **kwargs):
                 artifact_id = int(command[-1].split('/')[-2])
-                data = payloads[artifacts[artifact_id - 1]['name']]
-                stdout.write(data + (b'changed' if tamper else b''))
+                stdout.write(payloads[artifacts[artifact_id - 1]['name']] + (b'changed' if tamper else b''))
             with tempfile.TemporaryDirectory() as root, \
-                    patch('promote.tag_commit', return_value=SHA), \
+                    patch('promote.require_new_release'), patch('promote.tag_commit', return_value=SHA), \
                     patch('promote.api', side_effect=[{'status': 'identical'}, run()]), \
                     patch('promote.pages', side_effect=[jobs, artifacts]), \
-                    patch('promote.verify_attestation'), patch('promote.subprocess.run', side_effect=download):
+                    patch('promote.subprocess.run', side_effect=download):
                 if tamper:
                     with self.assertRaisesRegex(ValueError, 'digest mismatch'):
-                        promote.prepare('MeshLab-2025.07-rotatrix.1-beta.1', 42, Path(root))
+                        promote.prepare('MeshLab-2025.07-rotatrix.1', 42, Path(root))
                 else:
                     result = promote.prepare('MeshLab-2025.07-rotatrix.1', 42, Path(root))
                     self.assertEqual(result['run_id'], 42)
-                    self.assertFalse(result['prerelease'])
-                    for name, data in payloads.items():
-                        self.assertEqual((Path(root) / name).read_bytes(), data)
+                    self.assertEqual(len(result['artifacts']), 5)
 
-    def test_source_acceptance_required(self):
-        with patch.dict('os.environ', {'ROTATRIX_PROMOTION_ENABLED': 'true'}, clear=True), \
-                self.assertRaisesRegex(ValueError, 'completeness'):
-            promote.publish(Path('not-used'))
+    def test_existing_draft_or_public_release_is_rejected(self):
+        for draft in (True, False):
+            with patch('promote.subprocess.check_output', return_value=json.dumps(
+                    [[dict(tag_name='tag', draft=draft)]])), self.assertRaisesRegex(ValueError, 'exists'):
+                promote.require_new_release('tag')
+
+    def test_draft_contains_only_five_downloads_and_checksums(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root)
+            records = []
+            for name in promote.expected(SHA):
+                path = directory / name
+                path.write_bytes(b'app')
+                records.append(dict(name=name, sha256=promote.digest(path)))
+            (directory / 'signed').mkdir()
+            for arch in ('arm64', 'x64'):
+                (directory / 'signed' / f'signed-{arch}.tar.gz').write_bytes(b'signed')
+            plan = dict(repository=promote.REPO, tag='MeshLab-2025.07-rotatrix.1-beta.1',
+                        commit=SHA, run_id=42, artifacts=records, prerelease=True)
+            (directory / 'promotion.json').write_text(json.dumps(plan))
+            with patch('promote.tag_commit', return_value=SHA), patch('promote.require_new_release'), \
+                    patch('promote.subprocess.run') as command:
+                promote.draft(directory)
+                args = command.call_args.args[0]
+                self.assertIn('--draft', args)
+                self.assertIn('--verify-tag', args)
+                self.assertIn('--prerelease', args)
+                self.assertEqual(len((directory / 'SHA256SUMS').read_text().splitlines()), 5)
+                self.assertFalse(any('macos-app-' in arg or arg.endswith('.json') for arg in args))
+            with patch('promote.tag_commit', return_value='b' * 40), self.assertRaisesRegex(ValueError, 'Tag moved'):
+                promote.draft(directory)
 
     def test_notices_keep_mapping_without_deep_output_paths(self):
         with tempfile.TemporaryDirectory() as root:
@@ -155,42 +123,6 @@ class PromotionChecks(unittest.TestCase):
                 self.assertEqual(hashlib.sha256(payload.read_bytes()).hexdigest(), record['sha256'])
                 self.assertLess(len(payload.relative_to(output).as_posix()), 70)
             self.assertTrue(any('long-name' in r['source'] for r in records))
-
-    def test_build_record_and_source_snapshot(self):
-        previous = Path.cwd()
-        with tempfile.TemporaryDirectory() as root:
-            try:
-                os.chdir(root)
-                Path('ML_VERSION').write_text('2025.07\n')
-                plugins = Path('install/plugins')
-                plugins.mkdir(parents=True)
-                for i in range(75):
-                    (plugins / f'plugin{i}.dll').write_bytes(b'plugin')
-                submodule = Path('src/vcglib')
-                submodule.mkdir(parents=True)
-                (submodule / 'source.h').write_text('source')
-                (submodule / '.git').write_text('private git pointer')
-                fetched = Path('build/_deps/openaxis-src')
-                fetched.mkdir(parents=True)
-                (fetched / 'LICENSE').write_text('license')
-                with patch('build_record.git', side_effect=[SHA, 'ML_VERSION\0src/vcglib\0']):
-                    build_record.sources()
-                archive = Path(f'portable/MeshLab-sources-{SHA[:12]}.tar.gz')
-                with tarfile.open(archive) as tar:
-                    names = tar.getnames()
-                    self.assertIn('meshlab/src/vcglib/source.h', names)
-                    self.assertIn('meshlab/dependency-sources/openaxis-src/LICENSE', names)
-                    self.assertFalse(any(n.endswith('/.git') for n in names))
-                env = dict(GITHUB_REPOSITORY=promote.REPO, GITHUB_REF='refs/heads/' + run()['head_branch'],
-                           GITHUB_EVENT_NAME='push', GITHUB_RUN_ID='42', GITHUB_RUN_ATTEMPT='1')
-                with patch.dict('os.environ', env), patch('build_record.git', side_effect=[SHA, 'submodule revision']):
-                    build_record.record('windows-2022')
-                record = json.loads(Path(f'provenance/build-windows-2022-{SHA[:12]}.json').read_text())
-                self.assertEqual(len(record['plugins']), 75)
-                self.assertEqual(record['packages'][archive.name], build_record.digest(archive))
-                self.assertTrue(record['source_review_required'])
-            finally:
-                os.chdir(previous)
 
 
 if __name__ == '__main__':

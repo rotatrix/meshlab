@@ -95,8 +95,6 @@ jobs:
         uses: ./.github/actions/2_deploy
         with:
           use-brew-qt: ${{ matrix.os == 'macos-15' }}
-          win-certificate: ${{ github.repository == 'rotatrix/meshlab' && github.event_name != 'pull_request' && startsWith(github.ref, 'refs/heads/rotatrix/') && secrets.WIN_CERTIFICATE || '' }}
-          win-certificate-pssw: ${{ github.repository == 'rotatrix/meshlab' && github.event_name != 'pull_request' && startsWith(github.ref, 'refs/heads/rotatrix/') && secrets.WIN_CERTIFICATE_PSSW || '' }}
       - name: Package and smoke-test macOS app
         if: runner.os == 'macOS'
         shell: bash
@@ -144,7 +142,7 @@ jobs:
           if-no-files-found: error
       - name: Record package hashes and configuration
         env:
-          WINDOWS_SIGNED: ${{ runner.os == 'Windows' && github.repository == 'rotatrix/meshlab' && github.event_name != 'pull_request' && startsWith(github.ref, 'refs/heads/rotatrix/') && secrets.WIN_CERTIFICATE != '' && secrets.WIN_CERTIFICATE_PSSW != '' }}
+          WINDOWS_SIGNED: 'false'
         shell: bash
         run: python scripts/rotatrix/build_record.py record --platform '${{ matrix.os }}'
       - name: Attest trusted build outputs
