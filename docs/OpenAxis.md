@@ -3,18 +3,17 @@
 Start Rotatrix 1.6 or newer and select a profile matching `app.meshlab`.
 The client reports its PID, the `workspace.modeling` tag and navigation capability.
 The SDK connects to the local service on port 6607. Open a mesh and activate its
-viewport. Use **Help → OpenAxis Diagnostics**, **⌘⇧O** on macOS, or
-**Ctrl+Shift+O** on Windows/Linux to open the modeless
-**OpenAxis Diagnostics** window. It shows connection/focus/gesture status, the
-connection error and automatic retry countdown. **Reconnect** restarts the connection
-immediately; **Copy diagnostics** copies status, SDK evidence and the last 64 KiB
-of the SDK log. On Windows, logs are in `%LOCALAPPDATA%/Rotatrix/logs/meshlab-*.log`.
-A green marker shows the active pivot.
-Opening the window automatically draws the SDK presentation:
-semantic-colored text rows, labeled cursor/center crosshairs, candidate bounds and
-point crosses, and any supplied world-orientation geometry. Closing the window
-removes the diagnostic overlay; the normal pivot remains independent.
-There is no event-log viewer or diagnostics checkbox. Coincident query labels stack beside one
+viewport. Use **View → OpenAxis Diagnostics**, **⌘⇧O** on macOS, or
+**Ctrl+Shift+O** on Windows/Linux to toggle diagnostics in the current viewport.
+The checkmark reflects that viewport's visibility. Connection/focus/gesture status,
+connection errors and SDK diagnostic evidence appear directly over the scene.
+Connection and retries are automatic; there is no reconnect button or separate
+status window. On Windows, logs are in `%LOCALAPPDATA%/Rotatrix/logs/meshlab-*.log`.
+A green marker shows the active pivot independently of diagnostics visibility.
+The overlay includes semantic-colored rows, labeled cursor/center crosshairs,
+candidate bounds and point crosses, and supplied world-orientation geometry.
+Turning the toggle off removes diagnostics without changing logging or the pivot.
+Coincident query labels stack beside one
 crosshair. Geometry follows native camera motion, clips to the viewport/frustum,
 and clears with its captured context or SDK expiry. Diagnostics never enter depth
 picking, bounds, selection, undo or saved content. No pick rays or camera axes are added.

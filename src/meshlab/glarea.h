@@ -174,6 +174,7 @@ public:
 
     void updateFps(float deltaTime);
     void toggleOpenAxisDiagnostics();
+    bool openAxisDiagnosticsVisible() const;
 
     bool isCurrent() { if (mvc() == NULL) return false;return mvc()->currentId == this->id;}
 

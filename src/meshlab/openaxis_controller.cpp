@@ -12,19 +12,11 @@
 #include "openaxis_scheduler.h"
 #include "openaxis_focus.h"
 #include <QApplication>
-#include <QClipboard>
 #include <QImage>
 #include <QCursor>
-#include <QDialog>
-#include <QFile>
-#include <QHBoxLayout>
 #include <QGLFramebufferObject>
-#include <QLabel>
 #include <QPainter>
-#include <QPointer>
-#include <QPushButton>
 #include <QTimer>
-#include <QVBoxLayout>
 #include <cmath>
 #include <climits>
 #include <limits>
@@ -94,8 +86,8 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
     openaxis::NavigationSession &session;
     openaxis::OpenAxisConnectionManager &connection;
     bool focused = false;
-    QPointer<QDialog> diagnostics;
-    QPointer<QLabel> statusLabel;
+    bool diagnosticsVisible = false;
+    QString lastStatus;
     bool matricesValid = false;
     double sceneModel[16]{}, sceneProjection[16]{};
     std::optional<double> overlayExpiry;
@@ -122,72 +114,26 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
     }
     ~Impl() override {
         hub->remove(this);
-        delete diagnostics.data();
-    }
-    QString logPath() const {
-        return QString::fromStdString(openaxis::DiagnosticLog::configure("meshlab")->path().u8string());
     }
     QString statusText() const {
         const auto s = connection.status();
-        QString result = QString("Connection: %1 (shared by all viewports)\nEndpoint: %2\nViewport focus: %3 | Gesture: %4")
-            .arg(QString::fromStdString(s.state), QString::fromStdString(client.url()),
-                 focused ? "active" : "inactive", hub->current==this && session.active() ? "active" : "idle");
-        if (!s.error.empty()) result += "\nLast connection error: " + QString::fromStdString(s.error);
-        if (s.retry_at) result += QString("\nAutomatic retry in %1 s").arg(std::max(0., *s.retry_at-openaxis::diagnostic_time()), 0, 'f', 1);
-        result += "\nLog: " + logPath();
+        QString result = QString("OpenAxis: %1 | Viewport: %2 | Gesture: %3")
+            .arg(QString::fromStdString(s.state), focused ? "active" : "inactive",
+                 hub->current==this && session.active() ? "active" : "idle");
+        if (!s.error.empty()) result += "\n" + QString::fromStdString(s.error);
         return result;
     }
     void updateDiagnostics() {
-        if (diagnostics && diagnostics->isVisible()) statusLabel->setText(statusText());
-    }
-    void reconnect() {
-        session.cancel("manual_reconnect");
-        pivot.reset();
-        connection.stop();
-        connection.start();
+        const auto status = statusText();
+        if (status != lastStatus) {
+            lastStatus = status;
+            if (diagnosticsVisible) view.update();
+        }
     }
     void toggleDiagnostics() {
-        if (diagnostics) {
-            diagnostics->setVisible(!diagnostics->isVisible());
-        } else {
-            diagnostics = new QDialog(&view, Qt::Tool);
-            diagnostics->setWindowTitle("OpenAxis Diagnostics");
-            diagnostics->setModal(false);
-            diagnostics->resize(520, 150);
-            auto *layout = new QVBoxLayout(diagnostics);
-            statusLabel = new QLabel(diagnostics);
-            statusLabel->setTextFormat(Qt::PlainText);
-            statusLabel->setWordWrap(true);
-            statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-            layout->addWidget(statusLabel);
-            auto *buttons = new QHBoxLayout;
-            layout->addLayout(buttons);
-            auto addButton = [&](const QString &label, auto callback) {
-                auto *button = new QPushButton(label, diagnostics);
-                buttons->addWidget(button);
-                QObject::connect(button, &QPushButton::clicked, &sceneObserver, callback);
-            };
-            addButton("Reconnect", [this] { reconnect(); });
-            addButton("Copy diagnostics", [this] {
-                QString text = "MeshLab OpenAxis diagnostics\n" + statusText() + "\n\n";
-                for (const auto &line : collector.presentation().lines) text += QString::fromStdString(line.text) + "\n";
-                QFile log(logPath());
-                if (log.open(QIODevice::ReadOnly)) {
-                    log.seek(std::max<qint64>(0, log.size()-65536));
-                    text += "\n\nSDK log (last 64 KiB):\n" + QString::fromUtf8(log.readAll());
-                }
-                QApplication::clipboard()->setText(text);
-            });
-
-            addButton("Close", [this] { diagnostics->close(); });
-            QObject::connect(diagnostics, &QDialog::finished, &sceneObserver, [this] {
-                if (hub->current==this) collector.set_enabled(false);
-                view.update();
-            });
-            diagnostics->show();
-        }
+        diagnosticsVisible = !diagnosticsVisible;
+        overlayExpiry.reset();
         hub->refresh();
-        updateDiagnostics();
         view.update();
     }
     bool available() const {
@@ -231,7 +177,7 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         hub->refresh();
     }
     void refreshCurrent() {
-        collector.set_enabled(diagnostics && diagnostics->isVisible());
+        collector.set_enabled(diagnosticsVisible);
         if (overlayExpiry && openaxis::diagnostic_time() >= *overlayExpiry) {
             overlayExpiry.reset(); view.update();
         }
@@ -371,7 +317,7 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
         if (!available()) return;
         painter.save();
         painter.setClipRect(view.rect());
-        if (diagnostics && diagnostics->isVisible() && matricesValid) {
+        if (diagnosticsVisible) {
             const auto frame=collector.presentation();
             overlayExpiry=frame.expires_at;
             // Rasterize text on the CPU: MeshLab's native GL state can leave
@@ -380,7 +326,18 @@ struct OpenAxisController::Impl final : openaxis::NavigationAdapter {
             QImage image(QSize(int(std::ceil(view.width()*dpi)),int(std::ceil(view.height()*dpi))),QImage::Format_ARGB32_Premultiplied);
             image.setDevicePixelRatio(dpi); image.fill(Qt::transparent);
             QPainter raster(&image);
-            meshlab_openaxis::overlay::draw(raster,frame,key(),sceneModel,sceneProjection,view.size(),openaxis::diagnostic_colors());
+            if (matricesValid)
+                meshlab_openaxis::overlay::draw(raster,frame,key(),sceneModel,sceneProjection,view.size(),openaxis::diagnostic_colors());
+            // Connection state belongs in the viewport, even before a gesture
+            // has supplied SDK evidence. Keep it below the diagnostic rows.
+            QFont font = raster.font(); font.setPixelSize(12); raster.setFont(font);
+            int y = 16 + (matricesValid && frame.context == key() ? int(frame.lines.size()) * 15 : 0);
+            for (const auto &line : statusText().split('\n')) {
+                raster.fillRect(QRect(14, y, raster.fontMetrics().horizontalAdvance(line) + 8, 15), QColor(0,0,0,190));
+                raster.setPen(Qt::white);
+                raster.drawText(QPoint(16, y + raster.fontMetrics().ascent()), line);
+                y += 15;
+            }
             raster.end();
             painter.drawImage(QPointF(),image);
         }
@@ -448,11 +405,6 @@ void OpenAxisController::Impl::Hub::refresh() {
     refreshing=true;
     struct Guard { bool &flag; ~Guard() { flag=false; } } guard{refreshing};
     auto *window=qobject_cast<MainWindow *>(QApplication::activeWindow());
-    // The diagnostics tool temporarily owns keyboard focus but remains bound
-    // to its document. It must not create another transport or move the camera.
-    if (!window) for (auto *v:views)
-        if (v->diagnostics && QApplication::activeWindow()==v->diagnostics)
-            window=v->view.mw();
     Impl *next=current;
     if (window) {
         next=nullptr;
@@ -501,5 +453,6 @@ void OpenAxisController::refresh() { impl->refresh(); }
 void OpenAxisController::paint(QPainter &p) { impl->paint(p); }
 void OpenAxisController::sampleDepth() { impl->sampleDepth(); }
 void OpenAxisController::toggleDiagnostics() { impl->toggleDiagnostics(); }
+bool OpenAxisController::diagnosticsVisible() const { return impl->diagnosticsVisible; }
 
 #include "openaxis_controller.moc"

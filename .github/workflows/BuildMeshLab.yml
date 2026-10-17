@@ -16,7 +16,7 @@ permissions:
 
 concurrency:
   group: meshlab-${{ github.workflow }}-${{ github.ref }}
-  # Let healthy builds finish and save dependency caches before the next run.
+  # Cancel explicitly superseded candidates before dispatch; branch advances alone do not cancel.
   cancel-in-progress: false
 
 env:

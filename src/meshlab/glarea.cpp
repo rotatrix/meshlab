@@ -140,6 +140,15 @@ void GLArea::toggleOpenAxisDiagnostics()
 #endif
 }
 
+bool GLArea::openAxisDiagnosticsVisible() const
+{
+#ifdef MESHLAB_OPENAXIS
+    return openaxisController && openaxisController->diagnosticsVisible();
+#else
+    return false;
+#endif
+}
+
 GLArea::~GLArea()
 {
 #ifdef MESHLAB_OPENAXIS

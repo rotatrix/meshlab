@@ -129,7 +129,7 @@ MainWindow::MainWindow() :
 	gpumeminfo = new vcg::QtThreadSafeMemoryInfo(mwsettings.maxgpumem);
 	setAcceptDrops(true);
 	mdiarea->setAcceptDrops(true);
-	setWindowTitle(MeshLabApplication::shortName());
+	setWindowTitle(MeshLabApplication::shortName() + tr(" - Rotatrix (unofficial build)"));
 	setStatusBar(new QStatusBar(this));
 	globalStatusBar() = statusBar();
 	qb = new QProgressBar(this);
@@ -615,6 +615,20 @@ void MainWindow::createMenus()
 	viewMenu->addSeparator();
 	viewMenu->addAction(showInfoPaneAct);
 	viewMenu->addSeparator();
+#ifdef MESHLAB_OPENAXIS
+    auto *openAxisDiagnosticsAct = viewMenu->addAction(tr("OpenAxis Diagnostics"));
+    openAxisDiagnosticsAct->setCheckable(true);
+    openAxisDiagnosticsAct->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O));
+    openAxisDiagnosticsAct->setShortcutContext(Qt::WindowShortcut);
+    connect(openAxisDiagnosticsAct, &QAction::triggered, this, [this, openAxisDiagnosticsAct] {
+        if (GLA()) GLA()->toggleOpenAxisDiagnostics();
+        openAxisDiagnosticsAct->setChecked(GLA() && GLA()->openAxisDiagnosticsVisible());
+    });
+    connect(viewMenu, &QMenu::aboutToShow, this, [this, openAxisDiagnosticsAct] {
+        openAxisDiagnosticsAct->setChecked(GLA() && GLA()->openAxisDiagnosticsVisible());
+    });
+    viewMenu->addSeparator();
+#endif
 	toolBarMenu = viewMenu->addMenu(tr("&ToolBars"));
 	toolBarMenu->addAction(showToolbarStandardAct);
 	//connect(toolBarMenu, SIGNAL(aboutToShow()), this, SLOT(updateMenus()));
@@ -637,14 +651,6 @@ void MainWindow::createMenus()
 	helpMenu->addAction(aboutPluginsAct);
 	helpMenu->addAction(onlineHelpAct);
 	helpMenu->addAction(onscreenHelpAct);
-#ifdef MESHLAB_OPENAXIS
-	auto *openAxisDiagnosticsAct = helpMenu->addAction(tr("OpenAxis Diagnostics"));
-	openAxisDiagnosticsAct->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O));
-	openAxisDiagnosticsAct->setShortcutContext(Qt::WindowShortcut);
-	connect(openAxisDiagnosticsAct, &QAction::triggered, this, [this] {
-		if (GLA()) GLA()->toggleOpenAxisDiagnostics();
-	});
-#endif
 	helpMenu->addAction(submitBugAct);
 	helpMenu->addAction(checkUpdatesAct);
 

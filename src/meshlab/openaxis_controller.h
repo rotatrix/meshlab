@@ -12,6 +12,7 @@ public:
     void paint(QPainter &);
     void sampleDepth();
     void toggleDiagnostics();
+    bool diagnosticsVisible() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;
