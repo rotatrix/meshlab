@@ -61,10 +61,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          pattern: MeshLab-*-${{ github.sha }}
+          pattern: MeshLab-*
           path: artifacts
+          skip-decompress: true
+          merge-multiple: true
       - name: Publish tagged packages
         env:
           GH_TOKEN: ${{ github.token }}
@@ -75,12 +77,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir release-assets
-          # Preserve Windows/Linux installers, AppImages and portable bundles.
+          # Preserve the short, already unique Windows/Linux download names.
           # The completion relay sends macOS apps to the central signer.
-          # Prefix the unique artifact directory to prevent package-name collisions.
           while IFS= read -r -d '' file; do
-            directory=$(basename "$(dirname "$file")")
-            cp "$file" "release-assets/$directory-$(basename "$file")"
+            target="release-assets/$(basename "$file")"
+            [[ ! -e "$target" ]] || { echo "Duplicate release asset: $target"; exit 1; }
+            cp "$file" "$target"
           done < <(find artifacts -type f -print0)
           args=()
           if [[ "$PRERELEASE" == true ]]; then args+=(--prerelease); fi

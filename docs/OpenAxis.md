@@ -102,7 +102,8 @@ ctest --test-dir build-local/tests -C Release --output-on-failure
 The source, composite actions and platform scripts start at official tag
 `MeshLab-2025.07` (commit `dc48b91ae562756a6988048c5d5c7f1d2b687256`).
 The upstream setup/build/deploy sequence, plugins and
-Windows/Linux portable/installer/AppImage packaging are retained. macOS uses the
+Windows portable and Linux portable/AppImage packaging are retained. The Windows
+installer script remains available locally but CI uses `--portable-only`. macOS uses the
 app-only archive described below. We do not import upstream main's workflow wholesale.
 
 | Area | Release-tag baseline | Current adaptation and reason |
@@ -138,9 +139,17 @@ exception to the workspace policy of preserving upstream precision variants.
 Double precision remains available through the upstream CMake option for local
 builds. One reusable build workflow serves previews and release builds.
 It runs the OpenAxis regressions,
-then uploads Windows/Linux portable bundles and installers/AppImages, plus macOS
-app-only archives named with architecture, precision and source SHA, retained for
+then uploads one Windows portable ZIP, Linux portable archives and AppImages, plus macOS
+app-only archives named with architecture and a 12-character source SHA, retained for
 14 days. Work-branch pushes create no release or tag. A missing desktop GL context explicitly skips the GL-only tests.
+
+Downloads use short names, for example `MeshLab-windows-x64-0123456789ab.zip`,
+`MeshLab-linux-arm64-0123456789ab.AppImage` and
+`macos-app-arm64-0123456789ab.tar.gz`. Uploads are direct files with no outer ZIP.
+The full commit is retained in `BUILD_COMMIT.txt` (inside Contents/Resources on
+macOS) and GitHub run metadata. Release publishing preserves these unique filenames
+instead of prefixing artifact directory names. Extract the Windows ZIP into a
+user-writable folder and run `meshlab.exe`; no installer or admin rights are required.
 
 When ready, clean up the downstream patch stack and create maintained branch
 `rotatrix/MeshLab-2025.07`; set that branch as the GitHub default at that time.
@@ -157,9 +166,9 @@ delete release tags; increase the suffix instead. No release tag is created by C
 
 ### macOS app archives and release signing
 
-Every macOS build produces `macos-app-<architecture>-<precision>-<sha>.tar.gz`
-containing only upstream-named `meshlab.app`. Both macOS architectures and both
-precisions remain in the matrix. The upstream deployment step bundles runtime
+Every macOS build produces `macos-app-<architecture>-<short-sha>.tar.gz`
+containing only upstream-named `meshlab.app`. Both macOS architectures remain
+in the single-precision matrix. The upstream deployment step bundles runtime
 libraries; `scripts/macOS/3_pack_app.sh` completes missing transitive Homebrew
 `@rpath` dylibs (for example Brotli/SharpYUV with Qt 5.15.19), checks that runtime
 dependencies resolve inside the app or to system libraries, adds source and
@@ -173,7 +182,7 @@ Local example after upstream build/install/deploy (use the Qt version used to bu
 
 ```bash
 QT_ROOT=/opt/homebrew/opt/qt@5 bash scripts/macOS/3_pack_app.sh \
-  install/meshlab.app build artifacts "arm64-single_precision-$(git rev-parse HEAD)"
+  install/meshlab.app build artifacts "arm64-$(git rev-parse --short=12 HEAD)"
 ```
 
 Previews have ad-hoc signatures and are not notarized. Tag builds create GitHub

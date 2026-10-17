@@ -46,6 +46,8 @@ for label, root in roots:
                 shutil.copyfile(path, target)
 for name in ('OpenAxis.md', 'OpenAxis.rotatrix.yaml'):
     shutil.copyfile(source / 'docs' / name, app / 'Contents/Resources' / name)
+(app / 'Contents/Resources/BUILD_COMMIT.txt').write_text(
+    subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True))
 PY
 
 bash "$SOURCE/scripts/macOS/internal/2b_adhoc_test_bundle.sh" "$APP"

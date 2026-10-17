@@ -6,6 +6,7 @@ INSTALL_PATH=$SCRIPTS_PATH/../../install
 QT_DIR_OPTION=""
 PACKAGES_PATH=$SCRIPTS_PATH/../../packages
 SIGN=false
+PORTABLE_ONLY=false
 CERT_FILE_OPTION=""
 CERT_PSSW=""
 
@@ -13,6 +14,10 @@ CERT_PSSW=""
 for i in "$@"
 do
 case $i in
+    --portable-only)
+        PORTABLE_ONLY=true
+        shift
+        ;;
     -i=*|--install_path=*)
         INSTALL_PATH="${i#*=}"
         shift # past argument=value
@@ -50,6 +55,10 @@ if [ "$SIGN" = true ] ; then
     bash $SCRIPTS_PATH/internal/2b_sign_dlls.sh -i=$INSTALL_PATH "$CERT_FILE_OPTION" "-cp=$CERT_PSSW" || exit $?
 
     echo "======= Portable Version Signed ======="
+fi
+
+if [ "$PORTABLE_ONLY" = true ]; then
+    exit 0
 fi
 
 bash $SCRIPTS_PATH/internal/2c_installer.sh -i=$INSTALL_PATH -p=$PACKAGES_PATH

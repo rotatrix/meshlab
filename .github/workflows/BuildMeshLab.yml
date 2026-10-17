@@ -66,7 +66,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "artifact_suffix=${{ matrix.precision }}_$(uname -m)" >> "$GITHUB_OUTPUT"
+          arch=$(uname -m)
+          case "$arch" in x86_64) arch=x64;; aarch64) arch=arm64;; esac
+          echo "artifact_suffix=$arch-${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
           if [[ "${{ matrix.os }}" == macos-15 ]]; then
             echo 'build_options=--use_brew_qt' >> "$GITHUB_OUTPUT"
             echo "CMAKE_PREFIX_PATH=$(brew --prefix qt@5)" >> "$GITHUB_ENV"
@@ -106,7 +108,7 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ matrix.os }}" == macos-15 ]]; then export QT_ROOT="$(brew --prefix qt@5)"; fi
-          bash scripts/macOS/3_pack_app.sh install/meshlab.app build portable "$(uname -m)-${{ matrix.precision }}-${GITHUB_SHA}"
+          bash scripts/macOS/3_pack_app.sh install/meshlab.app build portable "${{ steps.envs.outputs.artifact_suffix }}"
       - name: Upload macOS app
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -128,25 +130,26 @@ jobs:
           git rev-parse HEAD > install/BUILD_COMMIT.txt
           cp docs/OpenAxis.md docs/OpenAxis.rotatrix.yaml install/
           mkdir -p portable
-          name="MeshLab-OpenAxis-${RUNNER_OS}-${{ steps.envs.outputs.artifact_suffix }}-${GITHUB_SHA}"
+          name="MeshLab-${RUNNER_OS,,}-${{ steps.envs.outputs.artifact_suffix }}"
           if [[ "$RUNNER_OS" == Windows ]]; then
             7z a "portable/$name.zip" ./install/*
           else
             tar -czf "portable/$name.tar.gz" -C install .
+            cp packages/MeshLab*.AppImage "portable/$name.AppImage"
           fi
       - name: Upload MeshLab Portable
         if: runner.os != 'macOS'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: MeshLab-${{ runner.os }}-portable-${{ steps.envs.outputs.artifact_suffix }}-${{ github.sha }}
-          path: portable/*
+          path: portable/${{ runner.os == 'Windows' && '*.zip' || '*.tar.gz' }}
+          archive: false
           retention-days: 14
           if-no-files-found: error
       - name: Upload MeshLab Packages
-        if: runner.os != 'macOS'
-        uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: MeshLab-${{ runner.os }}-packages-${{ steps.envs.outputs.artifact_suffix }}-${{ github.sha }}
-          path: packages/MeshLab*
+          path: portable/*.AppImage
+          archive: false
           retention-days: 14
           if-no-files-found: error
