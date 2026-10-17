@@ -150,7 +150,6 @@ def prepare(tag, run_id, output):
         verify_attestation(path, run, output)
         records.append(dict(id=artifact['id'], name=path.name, sha256=digest(path)))
     by_name = {r['name']: r['sha256'] for r in records}
-    signed_windows = False
     for platform in PLATFORMS:
         metadata = json.loads((output / f'build-{platform}-{sha[:12]}.json').read_text())
         require(metadata['commit'] == sha and metadata['run_id'] == run_id and metadata['repository'] == REPO
@@ -163,10 +162,7 @@ def prepare(tag, run_id, output):
                 'Build version or platform package inventory mismatch')
         for name, checksum in metadata['packages'].items():
             require(by_name.get(name) == checksum, 'Build record package hash mismatch')
-        if platform == 'windows-2022':
-            signed_windows = metadata['windows_signed']
     prerelease = '-beta.' in tag
-    require(prerelease or signed_windows, 'Stable promotion requires Windows signing at build time')
     require(tag_commit(tag) == sha, 'Tag changed during verification')
     plan = dict(repository=REPO, tag=tag, commit=sha, run_id=run_id, run_attempt=run['run_attempt'],
                 source_ref='refs/heads/' + run['head_branch'], prerelease=prerelease,

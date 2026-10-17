@@ -102,7 +102,7 @@ class PromotionChecks(unittest.TestCase):
             metadata = dict(commit=SHA, run_id=42, repository=promote.REPO, platform=platform,
                             precision='single', plugins=[str(i) for i in range(75)],
                             ref='refs/heads/' + run()['head_branch'], event='push',
-                            version='2025.07', windows_signed=True,
+                            version='2025.07', windows_signed=False,
                             packages={name: hashlib.sha256(payloads[name]).hexdigest()
                                       for name in promote.platform_packages(platform, SHA)})
             payloads[f'build-{platform}-{SHA[:12]}.json'] = json.dumps(metadata).encode()
@@ -125,8 +125,9 @@ class PromotionChecks(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, 'digest mismatch'):
                         promote.prepare('MeshLab-2025.07-rotatrix.1-beta.1', 42, Path(root))
                 else:
-                    result = promote.prepare('MeshLab-2025.07-rotatrix.1-beta.1', 42, Path(root))
+                    result = promote.prepare('MeshLab-2025.07-rotatrix.1', 42, Path(root))
                     self.assertEqual(result['run_id'], 42)
+                    self.assertFalse(result['prerelease'])
                     for name, data in payloads.items():
                         self.assertEqual((Path(root) / name).read_bytes(), data)
 

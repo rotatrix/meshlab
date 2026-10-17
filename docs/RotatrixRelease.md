@@ -22,8 +22,8 @@ distribution, review corresponding-source/license obligations, including Qt and
 platform libraries, and retain any additional required sources. The publication
 input records that review; it is not automatically inferred from build success.
 
-Windows signing, when configured, occurs during the trusted build. A beta can
-explicitly accept unsigned Windows packages; stable promotion rejects them.
+Windows packages are intentionally unsigned for both stable and preview releases.
+The recorded signing status is informational; only macOS uses central signing.
 Promotion preserves embedded versions and package bytes. A desired metadata or
 signing change requires another build, never a patch to an accepted package.
 
